@@ -1,0 +1,343 @@
+import json
+import tempfile
+import zipfile
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from calculadora3d.core.threemf import ThreeMFError, read_project, read_projects
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+MODEL_XML = '<?xml version="1.0"?><model unit="millimeter"/>'
+
+
+def _novo_caminho(nome: str) -> Path:
+    return Path(tempfile.mkdtemp(prefix="calc3d_")) / nome
+
+
+def _fixture_sintetica(*, weight="10", used_g=("10",), prediction="3600",
+                       printer="Bambu Lab A1", objects=1, model_settings=None,
+                       plate_index=1) -> Path:
+    itens = used_g.items() if isinstance(used_g, dict) else enumerate(used_g, start=1)
+    filaments = "".join(
+        f'<filament id="{i}" type="PLA" color="#161616" used_m="1.0" used_g="{g}"/>'
+        for i, g in itens
+    )
+    objs = '<object identify_id="1" name="x" skipped="false"/>' * objects
+    prediction_meta = ("" if prediction is None
+                       else f'<metadata key="prediction" value="{prediction}"/>')
+    slice_info = (
+        '<?xml version="1.0"?><config><plate>'
+        f'<metadata key="index" value="{plate_index}"/>'
+        f'{prediction_meta}'
+        f'<metadata key="weight" value="{weight}"/>'
+        f'{objs}{filaments}</plate></config>'
+    )
+    caminho = _novo_caminho("sintetica.gcode.3mf")
+    with zipfile.ZipFile(caminho, "w") as z:
+        z.writestr("3D/3dmodel.model", MODEL_XML)
+        z.writestr("Metadata/slice_info.config", slice_info)
+        z.writestr("Metadata/project_settings.config", json.dumps({"printer_model": printer}))
+        if model_settings is not None:
+            z.writestr("Metadata/model_settings.config", model_settings)
+    return caminho
+
+
+def _model_settings_com_placas(total: int, fatiada: int) -> str:
+    """Como o Ctrl+G do Bambu: lista todas as placas, só a exportada tem gcode."""
+    placas = "".join(
+        '<plate>'
+        f'<metadata key="plater_id" value="{i}"/>'
+        '<metadata key="gcode_file" value="'
+        f'{f"Metadata/plate_{i}.gcode" if i == fatiada else ""}"/>'
+        '</plate>'
+        for i in range(1, total + 1))
+    return f'<?xml version="1.0"?><config>{placas}</config>'
+
+
+def _placa_exportada(indice: int, total: int = 2, **kwargs) -> Path:
+    return _fixture_sintetica(plate_index=indice,
+                              model_settings=_model_settings_com_placas(total, indice),
+                              **kwargs)
+
+
+def _arquivo_texto_qualquer() -> Path:
+    caminho = _novo_caminho("texto.3mf")
+    caminho.write_text("isto nao e um zip")
+    return caminho
+
+
+def _fixture_com_xml_quebrado() -> Path:
+    caminho = _novo_caminho("quebrado.3mf")
+    with zipfile.ZipFile(caminho, "w") as z:
+        z.writestr("3D/3dmodel.model", MODEL_XML)
+        z.writestr("Metadata/slice_info.config", "<config><plate>")
+    return caminho
+
+
+def test_le_fixture_monocolor():
+    p = read_project(FIXTURES / "sliced_mono_1plate.3mf")
+    assert p.is_sliced is True
+    assert p.color_count == 1
+    assert p.total_seconds == 11037
+    assert p.total_grams == Decimal("33.83")
+    assert p.printer_model == "Bambu Lab A1"      # nao "N2S"
+    u, = p.usage
+    assert (u.slot, u.type, u.color) == (1, "PLA", "#161616")
+
+
+def test_slots_carregados_mas_nao_usados_nao_contam():
+    p = read_project(FIXTURES / "sliced_mono_1plate.3mf")
+    assert len(p.usage) == 1
+
+
+def test_copias_vem_dos_objects_do_slice_info():
+    p = read_project(FIXTURES / "sliced_mono_1plate.3mf")
+    assert p.copies == 12
+
+
+def test_placa_sem_fatia_gera_aviso():
+    p = read_project(FIXTURES / "sliced_mono_1plate.3mf")
+    assert any("2" in w for w in p.warnings)
+    assert len(p.plates) == 1
+
+
+def test_divergencia_de_peso_gera_aviso_e_nao_excecao():
+    p = read_project(_fixture_sintetica(weight="20", used_g=["10"]))
+    assert p.warnings
+    assert p.total_grams == Decimal("10")
+
+
+def test_projeto_salvo_com_slice_info_vazio_degrada():
+    p = read_project(FIXTURES / "saved_project_3colors.3mf")
+    assert p.is_sliced is False
+    assert p.color_count == 3
+    assert p.copies == 1
+    assert p.total_seconds == 0
+
+
+def test_arquivo_so_de_modelo_degrada():
+    p = read_project(FIXTURES / "model_only_3colors.3mf")
+    assert p.is_sliced is False
+    assert p.color_count == 3
+    assert p.total_seconds == 0
+    assert p.total_grams == Decimal("0")
+    assert p.copies == 1
+
+
+def test_zip_invalido_levanta_threemferror():
+    with pytest.raises(ThreeMFError):
+        read_project(_arquivo_texto_qualquer())
+
+
+def test_xml_corrompido_nomeia_a_entrada():
+    with pytest.raises(ThreeMFError, match="slice_info.config"):
+        read_project(_fixture_com_xml_quebrado())
+
+
+def test_le_fixture_multicolor():
+    p = read_project(FIXTURES / "sliced_multicolor.gcode.3mf")
+    assert p.color_count == 3
+    assert p.total_seconds == 2181
+    assert p.total_grams == Decimal("7.70")
+    assert {u.slot: u.grams for u in p.usage} == {
+        1: Decimal("3.33"), 2: Decimal("2.03"), 3: Decimal("2.34")}
+    assert p.copies == 1
+
+
+def test_modelo_so_de_modelo_com_pecas_distintas():
+    p = read_project(FIXTURES / "model_only_assembly.3mf")
+    assert p.is_sliced is False
+    assert p.color_count >= 2
+    assert p.copies >= 1
+
+
+def test_zip_sem_modelo_levanta_threemferror():
+    caminho = _novo_caminho("sem_modelo.3mf")
+    with zipfile.ZipFile(caminho, "w") as z:
+        z.writestr("Metadata/slice_info.config", "<config/>")
+    with pytest.raises(ThreeMFError, match="3dmodel.model"):
+        read_project(caminho)
+
+
+def test_fatiado_sem_objects_nao_gera_zero_copias():
+    p = read_project(_fixture_sintetica(objects=0))
+    assert p.copies == 1
+
+
+def test_json_corrompido_nomeia_a_entrada():
+    caminho = _novo_caminho("json_ruim.3mf")
+    with zipfile.ZipFile(caminho, "w") as z:
+        z.writestr("3D/3dmodel.model", MODEL_XML)
+        z.writestr("Metadata/project_settings.config", "{nao e json")
+    with pytest.raises(ThreeMFError, match="project_settings.config"):
+        read_project(caminho)
+
+
+def test_helper_sintetico_gera_caminhos_distintos():
+    assert _fixture_sintetica() != _fixture_sintetica()
+
+
+def test_fluxo_comprimido_corrompido_nomeia_a_entrada():
+    caminho = _novo_caminho("truncado.3mf")
+    with zipfile.ZipFile(caminho, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("3D/3dmodel.model", MODEL_XML * 200)
+    dados = bytearray(caminho.read_bytes())
+    inicio = 30 + len("3D/3dmodel.model")
+    for i in range(inicio + 2, inicio + 12):
+        dados[i] ^= 0xFF
+    caminho.write_bytes(bytes(dados))
+    with pytest.raises(ThreeMFError, match="3dmodel.model"):
+        read_project(caminho)
+
+
+@pytest.mark.parametrize("used_g", ["NaN", "Infinity"])
+def test_valor_nao_finito_levanta_threemferror(used_g):
+    with pytest.raises(ThreeMFError, match="slice_info.config"):
+        read_project(_fixture_sintetica(used_g=[used_g]))
+
+
+def test_prediction_infinito_levanta_threemferror():
+    with pytest.raises(ThreeMFError, match="slice_info.config"):
+        read_project(_fixture_sintetica(prediction="Infinity"))
+
+
+def test_soma_placas_de_dois_arquivos():
+    a = _fixture_sintetica(prediction=1000, used_g=["10"])
+    b = _fixture_sintetica(prediction=2000, used_g=["5"])
+    p = read_projects([a, b])
+    assert p.total_seconds == 3000
+    assert p.total_grams == Decimal("15")
+    assert len(p.plates) == 2
+    assert [pl.index for pl in p.plates] == [1, 2]
+    assert p.sources == (a, b)
+    assert p.source_path == a
+
+
+def test_mescla_slots_pelo_id_somando_gramas():
+    a = _fixture_sintetica(used_g={1: "10", 2: "4"})
+    b = _fixture_sintetica(used_g={1: "6"})
+    p = read_projects([a, b])
+    assert {u.slot: u.grams for u in p.usage} == {1: Decimal("16"), 2: Decimal("4")}
+    assert p.color_count == 2
+
+
+def test_impressoras_diferentes_geram_aviso():
+    p = read_projects([_fixture_sintetica(printer="Bambu Lab A1"),
+                       _fixture_sintetica(printer="Bambu Lab P1S")])
+    assert any("impressora" in w.lower() for w in p.warnings)
+    assert p.printer_model == "Bambu Lab A1"
+
+
+def test_arquivo_repetido_e_ignorado_com_aviso():
+    a = _fixture_sintetica(prediction=1000, used_g=["10"])
+    p = read_projects([a, a])
+    assert p.total_seconds == 1000
+    assert p.sources == (a,)
+    assert any("repetido" in w.lower() for w in p.warnings)
+
+
+def test_lista_vazia_levanta_threemferror():
+    with pytest.raises(ThreeMFError):
+        read_projects([])
+
+
+def test_um_arquivo_so_tem_o_mesmo_resultado_de_read_project():
+    a = FIXTURES / "sliced_mono_1plate.3mf"
+    assert read_projects([a]).total_grams == read_project(a).total_grams
+
+
+def test_nome_comum_de_placas_do_mesmo_projeto():
+    d = Path(tempfile.mkdtemp(prefix="calc3d_"))
+    a, b = d / "faca_plate_1.gcode.3mf", d / "faca_plate_2.gcode.3mf"
+    for caminho in (a, b):
+        caminho.write_bytes(_fixture_sintetica().read_bytes())
+    assert read_projects([a, b]).name == "faca"
+
+
+def test_nao_fatiado_em_qualquer_arquivo_torna_o_total_nao_fatiado():
+    p = read_projects([_fixture_sintetica(), FIXTURES / "saved_project_3colors.3mf"])
+    assert p.is_sliced is False
+    assert p.model_instances == 1
+
+
+def test_densidade_e_custo_do_slot_vem_do_project_settings():
+    caminho = FIXTURES / "sliced_mono_1plate.3mf"
+    with zipfile.ZipFile(caminho) as z:
+        settings = json.loads(z.read("Metadata/project_settings.config"))
+    u, = read_project(caminho).usage
+    assert u.density == Decimal(settings["filament_density"][0]) == Decimal("1.24")
+    assert u.cost_per_kg == Decimal(settings["filament_cost"][0]) == Decimal("20")
+
+
+def test_densidade_e_custo_ausentes_ou_invalidos_viram_none():
+    u, = read_project(_fixture_sintetica()).usage
+    assert (u.density, u.cost_per_kg) == (None, None)
+
+    caminho = _novo_caminho("lixo.gcode.3mf")
+    with zipfile.ZipFile(_fixture_sintetica()) as origem, zipfile.ZipFile(caminho, "w") as z:
+        for nome in origem.namelist():
+            if nome != "Metadata/project_settings.config":
+                z.writestr(nome, origem.read(nome))
+        z.writestr("Metadata/project_settings.config", json.dumps(
+            {"filament_density": ["abc"], "filament_cost": [""]}))
+    u, = read_project(caminho).usage
+    assert (u.density, u.cost_per_kg) == (None, None)
+
+
+def test_placa_fatiada_sem_filamento_gera_aviso():
+    p = read_project(_fixture_sintetica(weight="0", used_g=()))
+    assert p.is_sliced is True
+    assert p.total_grams == Decimal("0")
+    assert any("placa 1" in w and "peso" in w for w in p.warnings)
+
+
+def test_placa_fatiada_so_com_filamento_zerado_gera_aviso():
+    p = read_project(_fixture_sintetica(weight="0", used_g=("0",)))
+    assert any("placa 1" in w and "peso" in w for w in p.warnings)
+
+
+def test_placa_fatiada_sem_tempo_gera_aviso():
+    p = read_project(_fixture_sintetica(prediction=None))
+    assert p.total_seconds == 0
+    assert any("placa 1" in w and "tempo" in w for w in p.warnings)
+
+
+def test_placa_fatiada_completa_nao_gera_aviso_de_dado_ausente():
+    p = read_project(_fixture_sintetica())
+    assert not any("não informa" in w for w in p.warnings)
+
+
+def test_placa_de_outro_arquivo_nao_gera_aviso_de_placa_nao_fatiada():
+    um, dois = _placa_exportada(1, prediction=1000), _placa_exportada(2, prediction=2000)
+    assert any("placa 2 não foi fatiada" in w for w in read_project(um).warnings)
+    p = read_projects([um, dois])
+    assert p.total_seconds == 3000
+    assert not any("não foi fatiada" in w for w in p.warnings)
+
+
+def test_placa_ausente_de_todos_os_arquivos_continua_avisando():
+    p = read_projects([_placa_exportada(1, total=3), _placa_exportada(2, total=3)])
+    avisos = [w for w in p.warnings if "não foi fatiada" in w]
+    assert avisos and all("placa 3" in w for w in avisos)
+
+
+def test_placa_nao_fatiada_de_um_arquivo_so_continua_avisando():
+    p = read_projects([_placa_exportada(1)])
+    assert any("placa 2 não foi fatiada" in w for w in p.warnings)
+
+
+def test_mistura_fatiado_e_nao_fatiado_avisa_para_somar_o_nao_fatiado():
+    salvo = FIXTURES / "saved_project_3colors.3mf"
+    p = read_projects([_fixture_sintetica(), salvo])
+    assert p.is_sliced is False
+    assert (f"{salvo.name} não foi fatiado: some o peso e o tempo dele"
+            " aos valores pré-preenchidos") in p.warnings
+
+
+def test_so_arquivos_nao_fatiados_nao_avisam_para_somar():
+    p = read_projects([FIXTURES / "saved_project_3colors.3mf",
+                       FIXTURES / "model_only_3colors.3mf"])
+    assert not any("pré-preenchidos" in w for w in p.warnings)
