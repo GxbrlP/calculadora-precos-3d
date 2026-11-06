@@ -1,0 +1,153 @@
+// O que a calculadora lembra de uma vez para a outra: taxas, casas decimais,
+// arredondamento, memória, total geral, a fita, onde a câmera estava e as
+// preferências do painel.
+//
+// Tudo num `estado.json`. O formato do arquivo é a declaração de `Salvo` e nada
+// mais: `encode` e `Salvo.decode` são derivados dela pelo compilador.
+import ./formato
+import ./maquina
+
+type Salvo {
+    versao: Int -- Default as 1;
+    imposto: Float -- Default as 18.0;
+    juros: Float -- Default as 1.99;
+    casas: Int -- Default as 2;
+    arredondamento: Str -- Default as "5/4 (normal)";
+    memoria: Float -- Default as 0.0;
+    gt: Float -- Default as 0.0;
+    fita: maquina.Linha[dyn]
+    angulo: Float -- Default as 0.0;
+    elevacao: Float -- Default as 1.0;
+    distancia: Float -- Default as 18.5;
+    som: Bool -- Default as true;
+    girar: Bool -- Default as false;
+}
+
+func inicial(): Salvo {
+    m := maquina.nova()
+    return Salvo(1, m.imposto, m.juros, m.casas, m.arredondamento, 0.0, 0.0, m.fita, 0.0, 1.0, 18.5, true, false)
+}
+
+// Uma máquina nova com o que foi salvo. Valores fora do lugar (um arquivo
+// editado à mão) voltam ao padrão em vez de travar a calculadora.
+func maquinaDe(s: Salvo): maquina.Maquina {
+    mut maquina.Maquina m = maquina.nova()
+    if s.imposto >= 0.0 && s.imposto < 1000.0 {
+        m.imposto = s.imposto
+    }
+    if s.juros >= 0.0 && s.juros < 100.0 {
+        m.juros = s.juros
+    }
+    if s.casas >= -1 && s.casas <= 4 {
+        m.casas = s.casas
+    }
+    if indexOf(maquina.arredondamentos(), s.arredondamento) is Result.Ok(_) {
+        m.arredondamento = s.arredondamento
+    }
+    if s.memoria > 0.0 - maquina.limite() && s.memoria < maquina.limite() {
+        m.memoria = s.memoria
+    }
+    if s.gt > 0.0 - maquina.limite() && s.gt < maquina.limite() {
+        m.gt = s.gt
+    }
+    for each l in s.fita {
+        m = maquina.comLinha(m, l)
+    }
+    return m
+}
+
+// ---------------------------------------------------------------------------
+// Onde fica
+// ---------------------------------------------------------------------------
+
+// `CALC3D_DADOS` se definida (no ambiente ou num `.env`), senão uma pasta
+// própria em AppData no Windows ou na pasta pessoal nos demais.
+func pastaPadrao(): Str {
+    if hive.env.get("CALC3D_DADOS") is Result.Ok(pasta) && pasta != "" {
+        return pasta
+    }
+    if hive.env.get("APPDATA") is Result.Ok(pasta) && pasta != "" {
+        return pasta + "/CalculadoraPreco3D"
+    }
+    if hive.env.get("HOME") is Result.Ok(pasta) && pasta != "" {
+        return pasta + "/.calculadora-preco-3d"
+    }
+    return "dados"
+}
+
+func arquivo(pasta: Str): Str {
+    return pasta + "/estado.json"
+}
+
+func pastaDasFitas(pasta: Str): Str {
+    return pasta + "/fitas"
+}
+
+// ---------------------------------------------------------------------------
+// Ler e gravar
+// ---------------------------------------------------------------------------
+
+// O que foi lido, e um aviso quando algo deu errado ("" quando não deu).
+type Carga {
+    salvo: Salvo
+    aviso: Str
+}
+
+// O estado salvo. Sem arquivo, o de fábrica. Um arquivo que não se consegue ler
+// é guardado com outro nome — nada se perde — e a calculadora abre com o de
+// fábrica, avisando onde ficou a cópia.
+proc carregar(pasta: Str): Carga {
+    caminho := arquivo(pasta)
+    if hive.file.exists(caminho) == false {
+        return Carga(inicial(), "")
+    }
+    lido := hive.file.read(caminho)
+    if lido is Result.Error(problema) {
+        return Carga(inicial(), "Não foi possível ler {caminho}: {problema.message}")
+    } else if lido is Result.Ok(texto) {
+        decodificado := Salvo.decode(texto, hive.json.codec())
+        if decodificado is Result.Ok(s) {
+            return Carga(s, "")
+        } else if decodificado is Result.Error(problema) {
+            copia := caminho + ".invalido-" + hive.conv.its(hive.time.now())
+            _ := hive.file.copy(caminho, copia)
+            return Carga(inicial(), "O estado salvo estava inválido ({problema.path}); a cópia ficou em {copia}")
+        }
+    }
+}
+
+// Grava o estado. Primeiro num temporário, depois movido para o lugar, para que
+// uma falha no meio nunca deixe meio arquivo.
+proc salvar(pasta: Str, s: Salvo): Result<Bool, Str> {
+    if hive.file.makeDir(pasta) is Result.Error(problema) {
+        return Result.Error("Não foi possível criar {pasta}: {problema.message}")
+    }
+    caminho := arquivo(pasta)
+    temporario := caminho + ".tmp"
+    texto := encode(s, hive.json.codec())
+    if hive.file.write(temporario, texto) is Result.Error(problema) {
+        return Result.Error("Não foi possível gravar {temporario}: {problema.message}")
+    }
+    if hive.file.move(temporario, caminho) is Result.Error(_) {
+        // Onde mover por cima não é permitido, grava direto.
+        if hive.file.write(caminho, texto) is Result.Error(problema) {
+            return Result.Error("Não foi possível gravar {caminho}: {problema.message}")
+        }
+        _ := hive.file.delete(temporario)
+    }
+    return Result.Ok(true)
+}
+
+// Grava a fita num .txt com data e hora no nome, e responde com o caminho.
+proc exportarFita(pasta: Str, fita: maquina.Linha[], instante: Int): Result<Str, Str> {
+    destino := pastaDasFitas(pasta)
+    if hive.file.makeDir(destino) is Result.Error(problema) {
+        return Result.Error("Não foi possível criar {destino}: {problema.message}")
+    }
+    caminho := destino + "/fita-" + hive.time.format(instante, "%Y%m%d-%H%M%S") + ".txt"
+    cabecalho := "Calculadora de Preço 3D — fita de {formato.dataHora(instante)}\n\n"
+    if hive.file.write(caminho, cabecalho + maquina.fitaEmTexto(fita)) is Result.Error(problema) {
+        return Result.Error("Não foi possível gravar {caminho}: {problema.message}")
+    }
+    return Result.Ok(caminho)
+}

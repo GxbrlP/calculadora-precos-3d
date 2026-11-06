@@ -1,0 +1,878 @@
+// O motor da calculadora: o que cada tecla faz com o que está no visor.
+//
+// Funciona como uma calculadora comercial de mesa, de execução imediata:
+// `2 + 3 × 4 =` dá 20, não 14, porque cada operador fecha a conta anterior.
+// Doze dígitos, vírgula decimal, e o que se vê no visor é o que vale: cada
+// resultado é arredondado para as casas escolhidas antes de seguir adiante.
+//
+// Além das quatro operações, as teclas de preço:
+//   %       200 + 10 % = 220   ·   200 − 10 % = 180   ·   200 × 10 % = 20
+//           50 ÷ 200 % = 25 (quanto 50 é de 200)
+//   TAX+    soma o imposto (a taxa definida com TAXA) ao valor do visor
+//   TAX−    tira o imposto embutido num valor que já o inclui
+//   MU      custo MU margem = preço de venda com essa margem sobre o preço
+//   PARC    valor PARC n = parcela de n meses com os juros definidos em JUROS
+//   GT      o total geral: a soma de todo resultado de "="
+//
+// Nada aqui sabe de janela, de disco ou de 3D: cada tecla é uma função de uma
+// máquina numa máquina nova, e é assim que os testes a usam.
+import ./formato
+
+// ---------------------------------------------------------------------------
+// Os tipos
+// ---------------------------------------------------------------------------
+
+type Op {
+    Nenhuma
+    Soma
+    Subtracao
+    Multiplicacao
+    Divisao
+    Margem
+    Parcelas
+}
+
+type Acao {
+    Digito { d: Str }
+    DuploZero
+    Virgula
+    Operar { op: Op }
+    Igual
+    Porcento
+    Sinal
+    LimparTudo
+    LimparEntrada
+    Apagar
+    ComImposto
+    SemImposto
+    DefinirImposto
+    DefinirJuros
+    MemoriaLimpar
+    MemoriaLer
+    MemoriaSomar
+    MemoriaSubtrair
+    TotalGeral
+}
+
+// Uma linha da fita, como numa calculadora que imprime: o que é, o número e o
+// símbolo da operação. Um total sai destacado.
+type Linha {
+    rotulo: Str -- Default as "";
+    valor: Str -- Default as "";
+    simbolo: Str -- Default as "";
+    total: Bool -- Default as false;
+}
+
+type Maquina {
+    entrada: Str
+    negativa: Bool
+    digitando: Bool
+    substituir: Bool
+    valor: Float
+    acumulador: Float
+    operador: Op
+    constante: Op
+    operando: Float
+    memoria: Float
+    gt: Float
+    imposto: Float
+    juros: Float
+    casas: Int
+    arredondamento: Str
+    erro: Str
+    limpo: Bool
+    fita: Linha[dyn]
+}
+
+func maximoDigitos(): Int {
+    return 12
+}
+
+func limite(): Float {
+    return 1000000000000.0
+}
+
+func maximoFita(): Int {
+    return 500
+}
+
+// Os modos de arredondamento, na ordem em que o painel os mostra.
+func arredondamentos(): Str[dyn] {
+    return ["5/4 (normal)", "Para cima", "Para baixo"]
+}
+
+// As casas decimais possíveis; -1 é "livre", tantas quantas couberem.
+func opcoesCasas(): Str[dyn] {
+    return ["Livre", "0", "1", "2", "3", "4"]
+}
+
+func nomeCasas(casas: Int): Str {
+    if casas < 0 {
+        return "Livre"
+    }
+    return hive.conv.its(casas)
+}
+
+func casasDoNome(nome: Str): Int {
+    if hive.conv.sti(nome) is Result.Ok(n) && n >= 0 && n <= 4 {
+        return n
+    }
+    return -1
+}
+
+func nova(): Maquina {
+    Linha[dyn] vazia = []
+    return Maquina(
+        entrada: "",
+        negativa: false,
+        digitando: false,
+        substituir: false,
+        valor: 0.0,
+        acumulador: 0.0,
+        operador: Op.Nenhuma(),
+        constante: Op.Nenhuma(),
+        operando: 0.0,
+        memoria: 0.0,
+        gt: 0.0,
+        imposto: 18.0,
+        juros: 1.99,
+        casas: 2,
+        arredondamento: "5/4 (normal)",
+        erro: "",
+        limpo: false,
+        fita: vazia
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Números
+// ---------------------------------------------------------------------------
+
+func absoluto(v: Float): Float {
+    if v < 0.0 {
+        return 0.0 - v
+    }
+    return v
+}
+
+// Quantos dígitos tem a parte inteira de um valor: 0 → 1, 1234,5 → 4.
+func digitosInteiros(v: Float): Int {
+    a := absoluto(v)
+    if a < 1.0 {
+        return 1
+    }
+    mut n := 0
+    mut resto := a
+    for ; resto >= 1.0 && n < 30; {
+        resto = resto / 10.0
+        n++
+    }
+    return n
+}
+
+// O valor arredondado para `casas` casas no modo escolhido. "Livre" (-1) só
+// limpa o ruído do ponto flutuante, guardando as casas que cabem no visor.
+func arredondar(v: Float, casas: Int, modo: Str): Float {
+    mut c := casas
+    if c < 0 {
+        c = maximoDigitos() - digitosInteiros(v)
+        if c > 10 {
+            c = 10
+        }
+        if c < 0 {
+            c = 0
+        }
+        fatorLivre := hive.conv.itf(10 ** c)
+        return hive.conv.itf(hive.conv.round(v * fatorLivre)) / fatorLivre
+    }
+    fator := hive.conv.itf(10 ** c)
+    n := v * fator
+    mut direcao := 1.0
+    if n < 0.0 {
+        direcao = -1.0
+    }
+    a := absoluto(n)
+    // Uma folga de poucos ulps, para que 0,285 × 100 = 28,499999999999996 conte
+    // como 28,5, que é o que a pessoa digitou — e pequena o bastante para nunca
+    // mudar um centavo de verdade, mesmo perto do trilhão.
+    folga := hive.math.max(a * 0.000000000000001, 0.000000001)
+    mut inteiro := 0
+    if modo == "Para cima" {
+        inteiro = hive.conv.ceil(a - folga)
+    } else if modo == "Para baixo" {
+        inteiro = hive.conv.floor(a + folga)
+    } else {
+        inteiro = hive.conv.floor(a + 0.5 + folga)
+    }
+    return direcao * hive.conv.itf(inteiro) / fator
+}
+
+// O número formatado como o visor e a fita o mostram, nas casas escolhidas —
+// menos casas quando os doze dígitos não comportam todas.
+func formatar(v: Float, casas: Int): Str {
+    inteiros := digitosInteiros(v)
+    if casas < 0 {
+        mut c := maximoDigitos() - inteiros
+        if c > 10 {
+            c = 10
+        }
+        return formato.semZerosFinais(formato.decimal(v, c))
+    }
+    mut c := casas
+    if inteiros + c > maximoDigitos() {
+        c = maximoDigitos() - inteiros
+    }
+    texto := formato.decimal(v, c)
+    if texto is "-{resto}" && formato.semZerosFinais(resto) == "0" {
+        return resto
+    }
+    return texto
+}
+
+func formatarNa(m: Maquina, v: Float): Str {
+    return formatar(v, m.casas)
+}
+
+// Quantos dígitos (sem vírgula) tem o que está sendo digitado.
+func digitosDaEntrada(entrada: Str): Int {
+    return len(replaceAll(entrada, ",", ""))
+}
+
+// O valor do que está sendo digitado.
+func lerEntrada(entrada: Str, negativa: Bool): Float {
+    if entrada == "" || entrada == "," {
+        return 0.0
+    }
+    mut v := 0.0
+    if hive.conv.stf(replaceAll(entrada, ",", ".")) is Result.Ok(lido) {
+        v = lido
+    }
+    if negativa {
+        return 0.0 - v
+    }
+    return v
+}
+
+// Um valor como entrada, do jeito que teria sido digitado: sem ponto de
+// milhar, vírgula decimal, só as casas que cabem nos doze dígitos.
+func entradaDe(v: Float): Str {
+    a := absoluto(v)
+    mut c := maximoDigitos() - digitosInteiros(a)
+    if c > 10 {
+        c = 10
+    }
+    return replaceAll(formato.semZerosFinais(formato.decimal(a, c)), ".", "")
+}
+
+// O que está no visor, como número.
+func valorAtual(m: Maquina): Float {
+    if m.digitando {
+        return lerEntrada(m.entrada, m.negativa)
+    }
+    return m.valor
+}
+
+func simbolo(op: Op): Str {
+    switch op {
+        Op.Nenhuma { return "" }
+        Op.Soma { return "+" }
+        Op.Subtracao { return "−" }
+        Op.Multiplicacao { return "×" }
+        Op.Divisao { return "÷" }
+        Op.Margem { return "MU" }
+        Op.Parcelas { return "PARC" }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// As contas
+// ---------------------------------------------------------------------------
+
+// A parcela de `valor` em `n` meses a `juros`% ao mês (tabela Price). Sem juros,
+// o valor dividido igualmente.
+func parcela(valor: Float, n: Int, juros: Float): Float {
+    meses := hive.conv.itf(n)
+    i := juros / 100.0
+    if i <= 0.0 {
+        return valor / meses
+    }
+    return valor * i / (1.0 - (1.0 + i) ** (0.0 - meses))
+}
+
+// O preço que dá `margem`% de lucro sobre o próprio preço: custo ÷ (1 − margem).
+func precoComMargem(custo: Float, margem: Float): Float {
+    return custo / (1.0 - margem / 100.0)
+}
+
+// O número de parcelas, ou o motivo de não ser um.
+func meses(b: Float): Result<Int, Str> {
+    n := hive.conv.round(b)
+    if absoluto(b - hive.conv.itf(n)) > 0.000001 {
+        return Result.Error("Parcelas: use um número inteiro")
+    }
+    if n < 1 || n > 360 {
+        return Result.Error("Parcelas: de 1 a 360")
+    }
+    return Result.Ok(n)
+}
+
+func aplicar(a: Float, op: Op, b: Float, juros: Float): Result<Float, Str> {
+    switch op {
+        Op.Nenhuma { return Result.Ok(b) }
+        Op.Soma { return Result.Ok(a + b) }
+        Op.Subtracao { return Result.Ok(a - b) }
+        Op.Multiplicacao { return Result.Ok(a * b) }
+        Op.Divisao {
+            if b == 0.0 {
+                return Result.Error("Divisão por zero")
+            }
+            return Result.Ok(a / b)
+        }
+        Op.Margem {
+            if b >= 100.0 {
+                return Result.Error("Margem: precisa ser menor que 100%")
+            }
+            return Result.Ok(precoComMargem(a, b))
+        }
+        Op.Parcelas {
+            n := meses(b)
+            if n is Result.Ok(quantas) {
+                return Result.Ok(parcela(a, quantas, juros))
+            } else if n is Result.Error(motivo) {
+                return Result.Error(motivo)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// O estado depois de cada coisa
+// ---------------------------------------------------------------------------
+
+func comLinha(m: Maquina, linha: Linha): Maquina {
+    mut Maquina n = m
+    append(n.fita, linha)
+    total := len(n.fita)
+    excesso := total - maximoFita()
+    if excesso > 0 {
+        primeira := 0
+        ultima := excesso - 1
+        if n.fita bounds primeira && n.fita bounds ultima {
+            _ := drop(n.fita, primeira, ultima)
+        }
+    }
+    return n
+}
+
+func linha(rotulo: Str, valor: Str, simbolo: Str): Linha {
+    return Linha(rotulo, valor, simbolo, false)
+}
+
+func linhaTotal(rotulo: Str, valor: Str, simbolo: Str): Linha {
+    return Linha(rotulo, valor, simbolo, true)
+}
+
+func comErro(m: Maquina, motivo: Str): Maquina {
+    mut Maquina n = comLinha(m, linha(motivo, "", "E"))
+    n.erro = motivo
+    n.digitando = false
+    n.entrada = ""
+    n.operador = Op.Nenhuma()
+    n.constante = Op.Nenhuma()
+    return n
+}
+
+// Um resultado no visor: arredondado, conferido contra os doze dígitos e
+// pronto para a próxima conta.
+func comResultado(m: Maquina, v: Float): Maquina {
+    if v != v || v >= limite() || v <= 0.0 - limite() {
+        return comErro(m, "Estouro: mais de 12 dígitos")
+    }
+    mut Maquina n = m
+    n.valor = arredondar(v, m.casas, m.arredondamento)
+    n.digitando = false
+    n.substituir = false
+    n.entrada = ""
+    n.negativa = false
+    return n
+}
+
+// Um valor que entra como se tivesse sido digitado (memória, GT, imposto): a
+// próxima operação o usa, e o próximo dígito começa um número novo.
+func comoEntrada(m: Maquina, v: Float): Maquina {
+    if v != v || v >= limite() || v <= 0.0 - limite() {
+        return comErro(m, "Estouro: mais de 12 dígitos")
+    }
+    arredondado := arredondar(v, m.casas, m.arredondamento)
+    mut Maquina n = m
+    n.entrada = entradaDe(arredondado)
+    n.negativa = arredondado < 0.0
+    n.digitando = true
+    n.substituir = true
+    return n
+}
+
+func digito(m: Maquina, d: Str): Maquina {
+    mut Maquina n = m
+    if n.digitando == false || n.substituir {
+        n.entrada = ""
+        n.negativa = false
+        n.digitando = true
+        n.substituir = false
+    }
+    if n.entrada == "0" {
+        n.entrada = d
+    } else if digitosDaEntrada(n.entrada) < maximoDigitos() {
+        n.entrada = n.entrada + d
+    }
+    return n
+}
+
+func virgula(m: Maquina): Maquina {
+    mut Maquina n = m
+    if n.digitando == false || n.substituir {
+        n.entrada = "0,"
+        n.negativa = false
+        n.digitando = true
+        n.substituir = false
+        return n
+    }
+    if indexOf(n.entrada, ",") is Result.Ok(_) {
+        return n
+    }
+    if n.entrada == "" {
+        n.entrada = "0,"
+    } else if digitosDaEntrada(n.entrada) < maximoDigitos() {
+        n.entrada = n.entrada + ","
+    }
+    return n
+}
+
+func apagar(m: Maquina): Maquina {
+    if m.digitando == false || m.substituir {
+        return m
+    }
+    mut Maquina n = m
+    letras := split(n.entrada, "")
+    mut Str[dyn] ficam = []
+    mut i := 0
+    for each letra in letras {
+        if i < len(letras) - 1 {
+            append(ficam, letra)
+        }
+        i++
+    }
+    n.entrada = join(ficam, "")
+    if n.entrada == "" {
+        n.negativa = false
+    }
+    return n
+}
+
+func operar(m: Maquina, op: Op): Maquina {
+    // Um operador logo depois de outro só troca o operador.
+    if m.digitando == false && m.operador != Op.Nenhuma() {
+        mut Maquina n = m
+        n.operador = op
+        ultimo := len(n.fita) - 1
+        if n.fita bounds ultimo {
+            n.fita[ultimo].simbolo = simbolo(op)
+        }
+        return n
+    }
+    v := valorAtual(m)
+    mut Maquina n = comLinha(m, linha("", formatarNa(m, v), simbolo(op)))
+    if m.operador == Op.Nenhuma() || m.digitando == false {
+        n.acumulador = v
+    } else {
+        conta := aplicar(m.acumulador, m.operador, v, m.juros)
+        if conta is Result.Error(motivo) {
+            return comErro(n, motivo)
+        } else if conta is Result.Ok(r) {
+            n = comResultado(n, r)
+            if n.erro != "" {
+                return n
+            }
+            n.acumulador = n.valor
+        }
+    }
+    n = comResultado(n, n.acumulador)
+    n.acumulador = n.valor
+    n.operador = op
+    n.constante = Op.Nenhuma()
+    return n
+}
+
+// As linhas que explicam o resultado de MU e de PARC.
+func detalhes(m: Maquina, a: Float, op: Op, b: Float, r: Float): Linha[dyn] {
+    if op == Op.Margem() {
+        return [
+            linha("Custo", formatarNa(m, a), ""),
+            linha("Margem {formato.porcento(b)}", formatarNa(m, r - a), "lucro")
+        ]
+    }
+    if op == Op.Parcelas() {
+        mut n := 1
+        if meses(b) is Result.Ok(quantas) {
+            n = quantas
+        }
+        total := r * hive.conv.itf(n)
+        return [
+            linha("{n}× com juros de {formato.porcento(m.juros)} a.m.", "", ""),
+            linha("Total a prazo", formatarNa(m, total), ""),
+            linha("Juros pagos", formatarNa(m, total - a), "")
+        ]
+    }
+    Linha[dyn] nenhuma = []
+    return nenhuma
+}
+
+func rotuloResultado(op: Op): Str {
+    if op == Op.Margem() {
+        return "Preço de venda"
+    }
+    if op == Op.Parcelas() {
+        return "Parcela"
+    }
+    return ""
+}
+
+func igual(m: Maquina): Maquina {
+    if m.operador != Op.Nenhuma() {
+        a := m.acumulador
+        op := m.operador
+        mut b := a
+        if m.digitando {
+            b = valorAtual(m)
+        }
+        conta := aplicar(a, op, b, m.juros)
+        mut Maquina n = comLinha(m, linha("", formatarNa(m, b), "="))
+        if conta is Result.Error(motivo) {
+            return comErro(n, motivo)
+        } else if conta is Result.Ok(r) {
+            n = comResultado(n, r)
+            if n.erro != "" {
+                return n
+            }
+            for each l in detalhes(m, a, op, b, n.valor) {
+                n = comLinha(n, l)
+            }
+            n = comLinha(n, linhaTotal(rotuloResultado(op), formatarNa(n, n.valor), "*"))
+            n.gt = n.gt + n.valor
+            n.operador = Op.Nenhuma()
+            n.constante = op
+            n.operando = b
+            n.acumulador = n.valor
+            return n
+        }
+    }
+    if m.constante != Op.Nenhuma() {
+        // "=" de novo repete a última operação sobre o resultado: 2 × 3 = = = dá 6, 18, 54.
+        a := valorAtual(m)
+        conta := aplicar(a, m.constante, m.operando, m.juros)
+        if conta is Result.Error(motivo) {
+            return comErro(m, motivo)
+        } else if conta is Result.Ok(r) {
+            mut Maquina n = comResultado(m, r)
+            if n.erro != "" {
+                return n
+            }
+            n = comLinha(n, linha("{simbolo(m.constante)} {formatarNa(m, m.operando)}", "", "K"))
+            n = comLinha(n, linhaTotal(rotuloResultado(m.constante), formatarNa(n, n.valor), "*"))
+            n.gt = n.gt + n.valor
+            n.acumulador = n.valor
+            return n
+        }
+    }
+    return comResultado(m, valorAtual(m))
+}
+
+func porcento(m: Maquina): Maquina {
+    v := valorAtual(m)
+    a := m.acumulador
+    op := m.operador
+    if op == Op.Margem() || op == Op.Parcelas() {
+        return igual(m)
+    }
+    mut Maquina n = comLinha(m, linha("", formatarNa(m, v), "%"))
+    mut r := v / 100.0
+    if op == Op.Soma() {
+        acrescimo := arredondar(a * v / 100.0, m.casas, m.arredondamento)
+        n = comLinha(n, linha("Acréscimo", formatarNa(m, acrescimo), "+"))
+        r = a + acrescimo
+    } else if op == Op.Subtracao() {
+        desconto := arredondar(a * v / 100.0, m.casas, m.arredondamento)
+        n = comLinha(n, linha("Desconto", formatarNa(m, desconto), "−"))
+        r = a - desconto
+    } else if op == Op.Multiplicacao() {
+        r = a * v / 100.0
+    } else if op == Op.Divisao() {
+        if v == 0.0 {
+            return comErro(n, "Divisão por zero")
+        }
+        r = a / v * 100.0
+    }
+    n = comResultado(n, r)
+    if n.erro != "" {
+        return n
+    }
+    n = comLinha(n, linhaTotal("", formatarNa(n, n.valor), "*"))
+    if op != Op.Nenhuma() {
+        n.gt = n.gt + n.valor
+    }
+    n.operador = Op.Nenhuma()
+    n.constante = Op.Nenhuma()
+    n.acumulador = n.valor
+    return n
+}
+
+func comImposto(m: Maquina): Maquina {
+    v := valorAtual(m)
+    imposto := arredondar(v * m.imposto / 100.0, m.casas, m.arredondamento)
+    r := v + imposto
+    mut Maquina n = comLinha(m, linha("Sem imposto", formatarNa(m, v), ""))
+    n = comLinha(n, linha("Imposto {formato.porcento(m.imposto)}", formatarNa(m, imposto), "+"))
+    n = comoEntrada(n, r)
+    if n.erro != "" {
+        return n
+    }
+    return comLinha(n, linhaTotal("Com imposto", formatarNa(n, valorAtual(n)), "TAX+"))
+}
+
+func semImposto(m: Maquina): Maquina {
+    v := valorAtual(m)
+    base := arredondar(v / (1.0 + m.imposto / 100.0), m.casas, m.arredondamento)
+    mut Maquina n = comLinha(m, linha("Com imposto", formatarNa(m, v), ""))
+    n = comLinha(n, linha("Imposto {formato.porcento(m.imposto)}", formatarNa(m, v - base), "−"))
+    n = comoEntrada(n, base)
+    if n.erro != "" {
+        return n
+    }
+    return comLinha(n, linhaTotal("Sem imposto", formatarNa(n, valorAtual(n)), "TAX−"))
+}
+
+func definirImposto(m: Maquina): Maquina {
+    v := valorAtual(m)
+    if v < 0.0 || v >= 1000.0 {
+        return comErro(m, "Imposto: de 0 a 999%")
+    }
+    mut Maquina n = comLinha(m, linha("Imposto definido", formato.porcento(v), "TAXA"))
+    n.imposto = v
+    n.substituir = true
+    return n
+}
+
+func definirJuros(m: Maquina): Maquina {
+    v := valorAtual(m)
+    if v < 0.0 || v >= 100.0 {
+        return comErro(m, "Juros: de 0 a 99% ao mês")
+    }
+    mut Maquina n = comLinha(m, linha("Juros definidos", formato.porcento(v) + " a.m.", "JUROS"))
+    n.juros = v
+    n.substituir = true
+    return n
+}
+
+// M+ e M− fecham a conta pendente antes, como numa calculadora de mesa.
+func memoria(m: Maquina, fator: Float, nome: Str): Maquina {
+    mut Maquina n = m
+    if m.operador != Op.Nenhuma() {
+        n = igual(m)
+        if n.erro != "" {
+            return n
+        }
+    }
+    v := valorAtual(n)
+    soma := n.memoria + fator * v
+    if soma >= limite() || soma <= 0.0 - limite() {
+        return comErro(n, "Memória: estouro")
+    }
+    n.memoria = arredondar(soma, n.casas, n.arredondamento)
+    n = comLinha(n, linha("Memória", formatarNa(n, v), nome))
+    n.digitando = false
+    n.substituir = false
+    n.entrada = ""
+    n.valor = v
+    return n
+}
+
+func limparTudo(m: Maquina): Maquina {
+    mut Maquina n = m
+    if m.limpo {
+        // AC logo depois de AC: a máquina já está limpa; o que falta é o GT.
+        if m.gt != 0.0 {
+            n.gt = 0.0
+            n = comLinha(n, linha("Total geral zerado", "", "GT"))
+        }
+    } else if len(n.fita) > 0 {
+        n = comLinha(n, linha("", formatarNa(n, 0.0), "C"))
+    }
+    n.entrada = ""
+    n.negativa = false
+    n.digitando = false
+    n.substituir = false
+    n.valor = 0.0
+    n.acumulador = 0.0
+    n.operador = Op.Nenhuma()
+    n.constante = Op.Nenhuma()
+    n.operando = 0.0
+    n.erro = ""
+    n.limpo = true
+    return n
+}
+
+func limparEntrada(m: Maquina): Maquina {
+    mut Maquina n = m
+    n.entrada = ""
+    n.negativa = false
+    n.digitando = true
+    n.substituir = false
+    n.erro = ""
+    return n
+}
+
+func sinal(m: Maquina): Maquina {
+    mut Maquina n = m
+    if n.digitando {
+        if n.entrada != "" && lerEntrada(n.entrada, false) != 0.0 {
+            n.negativa = n.negativa == false
+        }
+    } else {
+        n.valor = 0.0 - n.valor
+        if n.valor == 0.0 {
+            n.valor = 0.0
+        }
+    }
+    return n
+}
+
+// O que uma tecla faz. Com erro no visor, só AC e CE respondem.
+func pressionar(m: Maquina, a: Acao): Maquina {
+    if m.erro != "" {
+        if a is Acao.LimparTudo {
+            return limparTudo(m)
+        } else if a is Acao.LimparEntrada {
+            mut Maquina n = limparTudo(m)
+            n.limpo = false
+            return n
+        }
+        return m
+    }
+    mut Maquina n = m
+    n.limpo = false
+    switch a {
+        Acao.Digito(d) { return digito(n, d) }
+        Acao.DuploZero { return digito(digito(n, "0"), "0") }
+        Acao.Virgula { return virgula(n) }
+        Acao.Operar(op) { return operar(n, op) }
+        Acao.Igual { return igual(n) }
+        Acao.Porcento { return porcento(n) }
+        Acao.Sinal { return sinal(n) }
+        Acao.LimparTudo { return limparTudo(m) }
+        Acao.LimparEntrada { return limparEntrada(n) }
+        Acao.Apagar { return apagar(n) }
+        Acao.ComImposto { return comImposto(n) }
+        Acao.SemImposto { return semImposto(n) }
+        Acao.DefinirImposto { return definirImposto(n) }
+        Acao.DefinirJuros { return definirJuros(n) }
+        Acao.MemoriaLimpar {
+            n.memoria = 0.0
+            return comLinha(n, linha("Memória zerada", "", "MC"))
+        }
+        Acao.MemoriaLer {
+            r := comoEntrada(n, n.memoria)
+            return comLinha(r, linha("Memória", formatarNa(r, n.memoria), "MR"))
+        }
+        Acao.MemoriaSomar { return memoria(n, 1.0, "M+") }
+        Acao.MemoriaSubtrair { return memoria(n, -1.0, "M−") }
+        Acao.TotalGeral {
+            r := comoEntrada(n, n.gt)
+            return comLinha(r, linha("Total geral", formatarNa(r, n.gt), "GT"))
+        }
+    }
+}
+
+// Várias teclas em sequência.
+func sequencia(m: Maquina, acoes: Acao[]): Maquina {
+    mut Maquina n = m
+    for each a in acoes {
+        n = pressionar(n, a)
+    }
+    return n
+}
+
+// ---------------------------------------------------------------------------
+// O visor
+// ---------------------------------------------------------------------------
+
+// O texto do visor: "1.234,5", "-12", "Erro".
+func visor(m: Maquina): Str {
+    if m.erro != "" {
+        return "Erro"
+    }
+    // Um valor calculado que entrou como número (TAX, MR, GT) aparece como os
+    // resultados, nas casas escolhidas.
+    if m.digitando && m.substituir {
+        return formatarNa(m, valorAtual(m))
+    }
+    if m.digitando {
+        mut inteira := m.entrada
+        mut fracao := ""
+        mut temVirgula := false
+        if indexOf(m.entrada, ",") is Result.Ok(_) {
+            temVirgula = true
+            partes := split(m.entrada, ",")
+            if partes is [antes, depois] {
+                inteira = antes
+                fracao = depois
+            }
+        }
+        mut numero := 0
+        if hive.conv.sti(inteira) is Result.Ok(lido) {
+            numero = lido
+        }
+        mut texto := formato.agrupar(numero)
+        if temVirgula {
+            texto = texto + "," + fracao
+        }
+        if m.negativa {
+            texto = "-" + texto
+        }
+        return texto
+    }
+    return formatarNa(m, m.valor)
+}
+
+// Os indicadores acesos no canto do visor.
+func indicadores(m: Maquina): Str[dyn] {
+    mut Str[dyn] acesos = []
+    if m.memoria != 0.0 {
+        append(acesos, "M")
+    }
+    if m.gt != 0.0 {
+        append(acesos, "GT")
+    }
+    if m.operador != Op.Nenhuma() {
+        append(acesos, simbolo(m.operador))
+    }
+    if m.constante != Op.Nenhuma() {
+        append(acesos, "K")
+    }
+    if m.erro != "" {
+        append(acesos, "E")
+    }
+    return acesos
+}
+
+// A fita como texto, para copiar ou salvar.
+func fitaEmTexto(fita: Linha[]): Str {
+    mut Str[dyn] linhas = []
+    for each l in fita {
+        mut rotulo := l.rotulo
+        if l.total && rotulo == "" {
+            rotulo = "Total"
+        }
+        append(linhas, formato.pontilhado(rotulo, 34) + formato.aDireita(l.valor, 18) + "  " + l.simbolo)
+    }
+    return join(linhas, "\n") + "\n"
+}

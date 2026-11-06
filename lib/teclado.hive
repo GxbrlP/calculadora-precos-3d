@@ -1,0 +1,337 @@
+// As teclas da calculadora: onde cada uma fica, o que está escrito nela, o que
+// faz, e qual tecla do computador faz o mesmo.
+//
+// A geometria mora aqui, e não no desenho, porque é a mesma para desenhar uma
+// tecla e para saber qual tecla está debaixo do cursor.
+//
+// Coordenadas da face da calculadora, vista de cima: x cresce para a direita,
+// z cresce para perto de quem usa (o visor fica no fundo, em z negativo).
+import ./maquina
+
+type Estilo {
+    Numero
+    Operador
+    Funcao
+    Memoria
+    Limpar
+    Igual
+}
+
+type Tecla {
+    acao: maquina.Acao
+    rotulo: Str
+    coluna: Int
+    linha: Int
+    altura: Int
+    estilo: Estilo
+}
+
+func tecla(acao: maquina.Acao, rotulo: Str, coluna: Int, linha: Int, estilo: Estilo): Tecla {
+    return Tecla(acao, rotulo, coluna, linha, 1, estilo)
+}
+
+func alta(acao: maquina.Acao, rotulo: Str, coluna: Int, linha: Int, estilo: Estilo): Tecla {
+    return Tecla(acao, rotulo, coluna, linha, 2, estilo)
+}
+
+func digito(d: Str, coluna: Int, linha: Int): Tecla {
+    return tecla(maquina.Acao.Digito(d), d, coluna, linha, Estilo.Numero())
+}
+
+func operador(op: maquina.Op, rotulo: Str, coluna: Int, linha: Int, estilo: Estilo): Tecla {
+    return tecla(maquina.Acao.Operar(op), rotulo, coluna, linha, estilo)
+}
+
+// Cinco colunas, sete fileiras; "=" e "+" ocupam as duas últimas.
+//
+//     MC    MR    M−    M+    GT
+//     TAXA  TAX−  TAX+  JUROS PARC
+//     AC    CE    ⌫     %     ÷
+//     7     8     9     MU    ×
+//     4     5     6     ±     −
+//     1     2     3     =     +
+//     0     00    ,     =     +
+func teclas(): Tecla[dyn] {
+    return [
+        tecla(maquina.Acao.MemoriaLimpar(), "MC", 0, 0, Estilo.Memoria()),
+        tecla(maquina.Acao.MemoriaLer(), "MR", 1, 0, Estilo.Memoria()),
+        tecla(maquina.Acao.MemoriaSubtrair(), "M−", 2, 0, Estilo.Memoria()),
+        tecla(maquina.Acao.MemoriaSomar(), "M+", 3, 0, Estilo.Memoria()),
+        tecla(maquina.Acao.TotalGeral(), "GT", 4, 0, Estilo.Memoria()),
+
+        tecla(maquina.Acao.DefinirImposto(), "TAXA", 0, 1, Estilo.Funcao()),
+        tecla(maquina.Acao.SemImposto(), "TAX−", 1, 1, Estilo.Funcao()),
+        tecla(maquina.Acao.ComImposto(), "TAX+", 2, 1, Estilo.Funcao()),
+        tecla(maquina.Acao.DefinirJuros(), "JUROS", 3, 1, Estilo.Funcao()),
+        operador(maquina.Op.Parcelas(), "PARC", 4, 1, Estilo.Funcao()),
+
+        tecla(maquina.Acao.LimparTudo(), "AC", 0, 2, Estilo.Limpar()),
+        tecla(maquina.Acao.LimparEntrada(), "CE", 1, 2, Estilo.Limpar()),
+        tecla(maquina.Acao.Apagar(), "⌫", 2, 2, Estilo.Limpar()),
+        tecla(maquina.Acao.Porcento(), "%", 3, 2, Estilo.Funcao()),
+        operador(maquina.Op.Divisao(), "÷", 4, 2, Estilo.Operador()),
+
+        digito("7", 0, 3),
+        digito("8", 1, 3),
+        digito("9", 2, 3),
+        operador(maquina.Op.Margem(), "MU", 3, 3, Estilo.Funcao()),
+        operador(maquina.Op.Multiplicacao(), "×", 4, 3, Estilo.Operador()),
+
+        digito("4", 0, 4),
+        digito("5", 1, 4),
+        digito("6", 2, 4),
+        tecla(maquina.Acao.Sinal(), "±", 3, 4, Estilo.Funcao()),
+        operador(maquina.Op.Subtracao(), "−", 4, 4, Estilo.Operador()),
+
+        digito("1", 0, 5),
+        digito("2", 1, 5),
+        digito("3", 2, 5),
+        alta(maquina.Acao.Igual(), "=", 3, 5, Estilo.Igual()),
+        alta(maquina.Acao.Operar(maquina.Op.Soma()), "+", 4, 5, Estilo.Operador()),
+
+        digito("0", 0, 6),
+        tecla(maquina.Acao.DuploZero(), "00", 1, 6, Estilo.Numero()),
+        tecla(maquina.Acao.Virgula(), ",", 2, 6, Estilo.Numero())
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// Geometria
+// ---------------------------------------------------------------------------
+
+func larguraTecla(): Float {
+    return 1.3
+}
+
+func fundoTecla(): Float {
+    return 0.95
+}
+
+func vaoX(): Float {
+    return 0.22
+}
+
+func vaoZ(): Float {
+    return 0.24
+}
+
+// Onde começa a primeira fileira (a borda do fundo dela).
+func inicioZ(): Float {
+    return -3.0
+}
+
+func centroX(t: Tecla): Float {
+    passo := larguraTecla() + vaoX()
+    larguraTotal := 5.0 * larguraTecla() + 4.0 * vaoX()
+    return 0.0 - larguraTotal / 2.0 + larguraTecla() / 2.0 + hive.conv.itf(t.coluna) * passo
+}
+
+// A profundidade da tecla, que nas teclas altas inclui o vão que elas cobrem.
+func fundo(t: Tecla): Float {
+    fileiras := hive.conv.itf(t.altura)
+    return fileiras * fundoTecla() + (fileiras - 1.0) * vaoZ()
+}
+
+func centroZ(t: Tecla): Float {
+    passo := fundoTecla() + vaoZ()
+    return inicioZ() + hive.conv.itf(t.linha) * passo + fundo(t) / 2.0
+}
+
+func contem(t: Tecla, x: Float, z: Float): Bool {
+    dx := x - centroX(t)
+    dz := z - centroZ(t)
+    meiaLargura := larguraTecla() / 2.0
+    meioFundo := fundo(t) / 2.0
+    return dx >= 0.0 - meiaLargura && dx <= meiaLargura && dz >= 0.0 - meioFundo && dz <= meioFundo
+}
+
+// A posição (na lista de `teclas`) da tecla debaixo de um ponto da face.
+func teclaEm(lista: Tecla[], x: Float, z: Float): Result<Int, Bool> {
+    mut i := 0
+    for each t in lista {
+        if contem(t, x, z) {
+            return Result.Ok(i)
+        }
+        i++
+    }
+    return Result.Error(false)
+}
+
+// A posição da tecla que faz uma ação.
+func teclaDaAcao(lista: Tecla[], acao: maquina.Acao): Result<Int, Bool> {
+    mut i := 0
+    for each t in lista {
+        if t.acao == acao {
+            return Result.Ok(i)
+        }
+        i++
+    }
+    return Result.Error(false)
+}
+
+// Os limites da área das teclas, onde o cursor pode andar (com uma folga).
+func minX(): Float {
+    return 0.0 - (5.0 * larguraTecla() + 4.0 * vaoX()) / 2.0 - 0.3
+}
+
+func maxX(): Float {
+    return (5.0 * larguraTecla() + 4.0 * vaoX()) / 2.0 + 0.3
+}
+
+func minZ(): Float {
+    return inicioZ() - 0.3
+}
+
+func maxZ(): Float {
+    return inicioZ() + 7.0 * fundoTecla() + 6.0 * vaoZ() + 0.3
+}
+
+// ---------------------------------------------------------------------------
+// O teclado do computador
+// ---------------------------------------------------------------------------
+
+// A ação de uma tecla do computador, pelo nome que a cena informa ("5", "+",
+// "enter", "backspace"...).
+func acaoDoTeclado(nome: Str): Result<maquina.Acao, Bool> {
+    if nome == "0" || nome == "1" || nome == "2" || nome == "3" || nome == "4" || nome == "5" || nome == "6" || nome == "7" || nome == "8" || nome == "9" {
+        return Result.Ok(maquina.Acao.Digito(nome))
+    }
+    if nome == "," || nome == "." {
+        return Result.Ok(maquina.Acao.Virgula())
+    }
+    if nome == "+" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Soma()))
+    }
+    if nome == "-" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Subtracao()))
+    }
+    if nome == "*" || nome == "x" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Multiplicacao()))
+    }
+    if nome == "/" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Divisao()))
+    }
+    if nome == "enter" || nome == "=" {
+        return Result.Ok(maquina.Acao.Igual())
+    }
+    if nome == "%" {
+        return Result.Ok(maquina.Acao.Porcento())
+    }
+    if nome == "backspace" {
+        return Result.Ok(maquina.Acao.Apagar())
+    }
+    if nome == "delete" {
+        return Result.Ok(maquina.Acao.LimparEntrada())
+    }
+    if nome == "c" {
+        return Result.Ok(maquina.Acao.LimparTudo())
+    }
+    if nome == "n" {
+        return Result.Ok(maquina.Acao.Sinal())
+    }
+    if nome == "t" {
+        return Result.Ok(maquina.Acao.ComImposto())
+    }
+    if nome == "y" {
+        return Result.Ok(maquina.Acao.SemImposto())
+    }
+    if nome == "i" {
+        return Result.Ok(maquina.Acao.DefinirImposto())
+    }
+    if nome == "j" {
+        return Result.Ok(maquina.Acao.DefinirJuros())
+    }
+    if nome == "u" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Margem()))
+    }
+    if nome == "p" {
+        return Result.Ok(maquina.Acao.Operar(maquina.Op.Parcelas()))
+    }
+    if nome == "m" {
+        return Result.Ok(maquina.Acao.MemoriaSomar())
+    }
+    if nome == "k" {
+        return Result.Ok(maquina.Acao.MemoriaSubtrair())
+    }
+    if nome == "r" {
+        return Result.Ok(maquina.Acao.MemoriaLer())
+    }
+    if nome == "l" {
+        return Result.Ok(maquina.Acao.MemoriaLimpar())
+    }
+    if nome == "g" {
+        return Result.Ok(maquina.Acao.TotalGeral())
+    }
+    return Result.Error(false)
+}
+
+// A tecla do computador que faz o mesmo que uma tecla da calculadora, para a
+// ajuda do painel.
+func atalho(t: Tecla): Str {
+    switch t.acao {
+        maquina.Acao.Digito(d) { return d }
+        maquina.Acao.DuploZero { return "0 0" }
+        maquina.Acao.Virgula { return ", ou ." }
+        maquina.Acao.Operar(op) {
+            switch op {
+                maquina.Op.Nenhuma { return "" }
+                maquina.Op.Soma { return "+" }
+                maquina.Op.Subtracao { return "-" }
+                maquina.Op.Multiplicacao { return "* ou x" }
+                maquina.Op.Divisao { return "/" }
+                maquina.Op.Margem { return "U" }
+                maquina.Op.Parcelas { return "P" }
+            }
+        }
+        maquina.Acao.Igual { return "Enter ou =" }
+        maquina.Acao.Porcento { return "%" }
+        maquina.Acao.Sinal { return "N" }
+        maquina.Acao.LimparTudo { return "C" }
+        maquina.Acao.LimparEntrada { return "Delete" }
+        maquina.Acao.Apagar { return "Backspace" }
+        maquina.Acao.ComImposto { return "T" }
+        maquina.Acao.SemImposto { return "Y" }
+        maquina.Acao.DefinirImposto { return "I" }
+        maquina.Acao.DefinirJuros { return "J" }
+        maquina.Acao.MemoriaLimpar { return "L" }
+        maquina.Acao.MemoriaLer { return "R" }
+        maquina.Acao.MemoriaSomar { return "M" }
+        maquina.Acao.MemoriaSubtrair { return "K" }
+        maquina.Acao.TotalGeral { return "G" }
+    }
+}
+
+// O que uma tecla faz, numa frase.
+func descricao(t: Tecla): Str {
+    switch t.acao {
+        maquina.Acao.Digito(d) { return "Dígito {d}" }
+        maquina.Acao.DuploZero { return "Dois zeros de uma vez" }
+        maquina.Acao.Virgula { return "Vírgula decimal" }
+        maquina.Acao.Operar(op) {
+            switch op {
+                maquina.Op.Nenhuma { return "" }
+                maquina.Op.Soma { return "Soma" }
+                maquina.Op.Subtracao { return "Subtração" }
+                maquina.Op.Multiplicacao { return "Multiplicação" }
+                maquina.Op.Divisao { return "Divisão" }
+                maquina.Op.Margem { return "Preço pela margem: custo MU margem% =" }
+                maquina.Op.Parcelas { return "Parcelamento: valor PARC meses = (juros de JUROS)" }
+            }
+        }
+        maquina.Acao.Igual { return "Resultado; de novo repete a última operação" }
+        maquina.Acao.Porcento { return "Porcentagem: 200 + 10 % = 220, 200 − 10 % = 180" }
+        maquina.Acao.Sinal { return "Troca o sinal" }
+        maquina.Acao.LimparTudo { return "Limpa tudo; duas vezes seguidas zera o GT" }
+        maquina.Acao.LimparEntrada { return "Limpa só o número digitado" }
+        maquina.Acao.Apagar { return "Apaga o último dígito" }
+        maquina.Acao.ComImposto { return "Soma o imposto ao valor" }
+        maquina.Acao.SemImposto { return "Tira o imposto de um valor que já o inclui" }
+        maquina.Acao.DefinirImposto { return "Define o imposto com o valor do visor: 18 TAXA" }
+        maquina.Acao.DefinirJuros { return "Define os juros ao mês com o valor do visor: 1,99 JUROS" }
+        maquina.Acao.MemoriaLimpar { return "Zera a memória" }
+        maquina.Acao.MemoriaLer { return "Traz a memória para o visor" }
+        maquina.Acao.MemoriaSomar { return "Soma o visor à memória" }
+        maquina.Acao.MemoriaSubtrair { return "Subtrai o visor da memória" }
+        maquina.Acao.TotalGeral { return "Traz o total geral (a soma dos resultados)" }
+    }
+}

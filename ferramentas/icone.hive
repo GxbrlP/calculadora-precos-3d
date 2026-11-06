@@ -1,0 +1,221 @@
+// Gera o ícone da calculadora — `assets/icon.png`, que o `hive build` embute
+// no executável e a janela mostra na barra de título.
+//
+//     hive run ferramentas/icone.hive [arquivo de saída]
+//
+// O desenho é a marca de `lib/marca.hive` — a mesma calculadora isométrica do
+// logotipo do painel — sobre um quadrado de cantos arredondados. O PNG é escrito
+// aqui mesmo, byte a byte: cabeçalho, uma imagem RGBA de 256×256 dentro de um
+// fluxo zlib sem compressão (blocos "stored"), CRC-32 em cada pedaço e Adler-32
+// no fim do fluxo. Cada pixel é a média de 4×4 amostras, para que as bordas
+// saiam suaves.
+import ../lib/marca
+
+func tamanho(): Int {
+    return 256
+}
+
+// ---------------------------------------------------------------------------
+// O desenho
+// ---------------------------------------------------------------------------
+
+type Cor {
+    r: Float
+    g: Float
+    b: Float
+    a: Float
+}
+
+// O quadrado de fundo, com margem de 8 e cantos de raio 52.
+func noFundo(x: Float, y: Float): Bool {
+    meio := 128.0
+    metade := 120.0
+    raio := 52.0
+    dx := hive.math.max(hive.math.abs(x - meio) - (metade - raio), 0.0)
+    dy := hive.math.max(hive.math.abs(y - meio) - (metade - raio), 0.0)
+    return dx * dx + dy * dy <= raio * raio
+}
+
+// O fundo vai do cinza-azulado ao quase preto, de cima para baixo.
+func fundo(y: Float): Cor {
+    t := hive.math.clamp(y / 256.0, 0.0, 1.0)
+    return Cor(58.0 - 30.0 * t, 65.0 - 34.0 * t, 82.0 - 38.0 * t, 1.0)
+}
+
+// A cor do desenho num ponto: a face da marca que estiver ali, senão o fundo,
+// senão nada. A marca vive num quadrado de 10 × 10, levado aos 256 pixels.
+func amostra(faces: marca.Face[], x: Float, y: Float): Cor {
+    escala := hive.conv.itf(tamanho()) / 10.0
+    achada := marca.corEm(faces, x / escala, y / escala)
+    if achada is Result.Ok(c) {
+        return Cor(hive.conv.itf(c.r), hive.conv.itf(c.g), hive.conv.itf(c.b), 1.0)
+    }
+    if noFundo(x, y) {
+        return fundo(y)
+    }
+    return Cor(0.0, 0.0, 0.0, 0.0)
+}
+
+func byte(valor: Float): UInt8 {
+    n := hive.conv.round(valor)
+    if n < 0 {
+        return UInt8(0)
+    }
+    if n > 255 {
+        return UInt8(255)
+    }
+    return UInt8(n)
+}
+
+// As linhas da imagem como o PNG as quer: cada uma começa com o filtro 0
+// (nenhum) e segue com R, G, B e A de cada pixel.
+func pixels(): UInt8[dyn] {
+    faces := marca.faces()
+    lado := tamanho()
+    passos := 4
+    total := hive.conv.itf(passos * passos)
+    mut UInt8[dyn] bruto = []
+    for y := 0; y < lado; y++ {
+        append(bruto, 0)
+        for x := 0; x < lado; x++ {
+            mut r := 0.0
+            mut g := 0.0
+            mut b := 0.0
+            mut a := 0.0
+            for sy := 0; sy < passos; sy++ {
+                for sx := 0; sx < passos; sx++ {
+                    px := hive.conv.itf(x) + (hive.conv.itf(sx) + 0.5) / hive.conv.itf(passos)
+                    py := hive.conv.itf(y) + (hive.conv.itf(sy) + 0.5) / hive.conv.itf(passos)
+                    c := amostra(faces, px, py)
+                    r = r + c.r * c.a
+                    g = g + c.g * c.a
+                    b = b + c.b * c.a
+                    a = a + c.a
+                }
+            }
+            if a > 0.0 {
+                r = r / a
+                g = g / a
+                b = b / a
+            }
+            append(bruto, byte(r))
+            append(bruto, byte(g))
+            append(bruto, byte(b))
+            append(bruto, byte(a / total * 255.0))
+        }
+    }
+    return bruto
+}
+
+// ---------------------------------------------------------------------------
+// O formato
+// ---------------------------------------------------------------------------
+
+// CRC-32 (o do PNG e do zip), bit a bit.
+func crc32(dados: UInt8[]): UInt32 {
+    mut UInt32 c = 0xFFFF_FFFF
+    for each b in dados {
+        c = c ^ UInt32(b)
+        for k := 0; k < 8; k++ {
+            if (c & 1) == 1 {
+                c = 0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c = c >> 1
+            }
+        }
+    }
+    return c ^ 0xFFFF_FFFF
+}
+
+// Adler-32, o verificador do fluxo zlib.
+func adler32(dados: UInt8[]): UInt32 {
+    mut a := 1
+    mut b := 0
+    for each octeto in dados {
+        a = (a + Int(octeto)) % 65521
+        b = (b + a) % 65521
+    }
+    return UInt32((b << 16) | a)
+}
+
+// Um bloco "stored" do deflate: o cabeçalho, o tamanho e o complemento dele
+// (os dois em little-endian), e os bytes como estão.
+proc bloco(saida: mut UInt8[dyn], conteudo: UInt8[], final: Bool): void {
+    if final {
+        append(saida, 1)
+    } else {
+        append(saida, 0)
+    }
+    n := len(conteudo)
+    complemento := 65535 - n
+    append(saida, UInt8(n & 0xFF))
+    append(saida, UInt8((n >> 8) & 0xFF))
+    append(saida, UInt8(complemento & 0xFF))
+    append(saida, UInt8((complemento >> 8) & 0xFF))
+    for each b in conteudo {
+        append(saida, b)
+    }
+}
+
+// Os dados num fluxo zlib sem compressão, em blocos de até 65535 bytes.
+proc zlib(dados: UInt8[]): UInt8[dyn] {
+    mut UInt8[dyn] saida = [0x78, 0x01]
+    mut UInt8[dyn] atual = []
+    for each b in dados {
+        append(atual, b)
+        if len(atual) == 65535 {
+            bloco(saida, atual, false)
+            atual = []
+        }
+    }
+    bloco(saida, atual, true)
+    UInt32 verificador = adler32(dados)
+    return saida + <<verificador>>
+}
+
+// Um pedaço do PNG: tamanho, tipo, conteúdo e o CRC do tipo com o conteúdo.
+func pedaco(tipo: Str, conteudo: UInt8[]): UInt8[dyn] {
+    UInt8[dyn] corpo = hive.conv.bytesOf(tipo) + conteudo
+    UInt32 tamanhoConteudo = UInt32(len(conteudo))
+    UInt32 verificador = crc32(corpo)
+    return <<tamanhoConteudo>> + corpo + <<verificador>>
+}
+
+proc png(): UInt8[dyn] {
+    UInt32 lado = UInt32(tamanho())
+    assinatura := <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>
+    // Largura, altura, 8 bits por canal, RGBA, deflate, filtro padrão, sem entrelaçar.
+    cabecalho := <<lado, lado, 8, 6, 0, 0, 0>>
+    UInt8[dyn] nada = []
+    return assinatura + pedaco("IHDR", cabecalho) + pedaco("IDAT", zlib(pixels())) + pedaco("IEND", nada)
+}
+
+proc main(): void {
+    mut destino := "../assets/icon.png"
+    if hive.term.args() is [caminho, ..._resto] {
+        destino = caminho
+    }
+    // A pasta do arquivo é tudo antes da última barra.
+    partes := split(destino, "/")
+    mut Str[dyn] anteriores = []
+    mut i := 0
+    for each parte in partes {
+        if i < len(partes) - 1 {
+            append(anteriores, parte)
+        }
+        i++
+    }
+    if len(anteriores) > 0 {
+        pasta := join(anteriores, "/")
+        if hive.file.makeDir(pasta) is Result.Error(problema) {
+            hive.term.status("não foi possível criar {pasta}: {problema.message}")
+            hive.term.exit(1)
+        }
+    }
+    bytes := png()
+    if hive.file.write(destino, hive.conv.fromBytes(bytes)) is Result.Error(problema) {
+        hive.term.status("não foi possível gravar {destino}: {problema.message}")
+        hive.term.exit(1)
+    }
+    hive.term.print("{destino}: {len(bytes)} bytes")
+}

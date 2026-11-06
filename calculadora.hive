@@ -1,0 +1,617 @@
+// Calculadora de Preço 3D
+// =======================
+// Uma calculadora de preços que é um objeto em três dimensões: uma calculadora
+// de mesa sobre uma mesa de madeira, com visor de cristal líquido de sete
+// segmentos e teclas de verdade, que afundam quando apertadas — pelo mouse,
+// apontando na própria calculadora, ou pelo teclado do computador.
+//
+// Faz as contas de preço de uma calculadora comercial: imposto (TAX+, TAX−,
+// TAXA), preço pela margem (MU), parcelamento com juros (PARC, JUROS),
+// porcentagem de acréscimo e desconto, memória e total geral, com casas
+// decimais e arredondamento à escolha e uma fita que anota cada passo.
+//
+//     hive run calculadora.hive       abre a janela
+//     hive build calculadora.hive     gera o executável
+//     hive test testes.hive           roda os testes
+import ./lib/cena
+import ./lib/estado
+import ./lib/formato
+import ./lib/maquina
+import ./lib/marca
+import ./lib/teclado
+import hive.ui
+
+// ---------------------------------------------------------------------------
+// O estado da janela
+// ---------------------------------------------------------------------------
+
+type Msg {
+    Apertou { nome: Str }
+    Soltou { nome: Str }
+    Olhou { dx: Float, dy: Float }
+    Agarrou { sim: Bool }
+    Passou { ms: Int }
+    Girar { dAngulo: Float, dElevacao: Float }
+    Aproximar { fator: Float }
+    VistaPadrao
+    GirarSozinha { sim: Bool }
+    Som { sim: Bool }
+    Imposto { texto: Str }
+    Juros { texto: Str }
+    Casas { nome: Str }
+    Arredondamento { modo: Str }
+    ZerarMemoria
+    ZerarTotal
+    CopiarFita
+    SalvarFita
+    LimparFita
+}
+
+type Modelo {
+    maquina: maquina.Maquina
+    camera: cena.Camera
+    cursor: cena.Cursor
+    mirando: Bool
+    girandoComMouse: Bool
+    seguradas: Str[dyn]
+    teclaDoMouse: Int
+    cliques: Int
+    ultima: Int
+    som: Bool
+    girar: Bool
+    tempo: Float
+    campoImposto: Str
+    campoJuros: Str
+    pasta: Str
+    aviso: Str
+    copia: Str
+    copiaSerie: Int
+}
+
+func inicial(pasta: Str, s: estado.Salvo): Modelo {
+    m := estado.maquinaDe(s)
+    Str[dyn] nenhuma = []
+    return Modelo(
+        maquina: m,
+        camera: cena.girar(cena.aproximar(cena.Camera(s.angulo, s.elevacao, s.distancia), 1.0), 0.0, 0.0),
+        cursor: cena.cursorInicial(),
+        mirando: false,
+        girandoComMouse: false,
+        seguradas: nenhuma,
+        teclaDoMouse: -1,
+        cliques: 0,
+        ultima: -1,
+        som: s.som,
+        girar: s.girar,
+        tempo: 0.0,
+        campoImposto: formato.numeroCampo(m.imposto),
+        campoJuros: formato.numeroCampo(m.juros),
+        pasta: pasta,
+        aviso: "",
+        copia: "",
+        copiaSerie: 0
+    )
+}
+
+// O que vai para o disco.
+func salvoDe(m: Modelo): estado.Salvo {
+    return estado.Salvo(
+        versao: 1,
+        imposto: m.maquina.imposto,
+        juros: m.maquina.juros,
+        casas: m.maquina.casas,
+        arredondamento: m.maquina.arredondamento,
+        memoria: m.maquina.memoria,
+        gt: m.maquina.gt,
+        fita: m.maquina.fita,
+        angulo: m.camera.angulo,
+        elevacao: m.camera.elevacao,
+        distancia: m.camera.distancia,
+        som: m.som,
+        girar: m.girar
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Consultas
+// ---------------------------------------------------------------------------
+
+// A tecla debaixo do cursor, ou -1.
+func sob(m: Modelo): Int {
+    if m.mirando && teclado.teclaEm(teclado.teclas(), m.cursor.x, m.cursor.z) is Result.Ok(i) {
+        return i
+    }
+    return -1
+}
+
+// As teclas afundadas agora: a do mouse e as do teclado do computador.
+func apertadas(m: Modelo): Int[dyn] {
+    lista := teclado.teclas()
+    mut Int[dyn] indices = []
+    if m.teclaDoMouse >= 0 {
+        append(indices, m.teclaDoMouse)
+    }
+    for each nome in m.seguradas {
+        if teclado.acaoDoTeclado(nome) is Result.Ok(a) && teclado.teclaDaAcao(lista, a) is Result.Ok(i) {
+            append(indices, i)
+        }
+    }
+    return indices
+}
+
+func quadro(m: Modelo): cena.Quadro {
+    return cena.Quadro(
+        maquina: m.maquina,
+        camera: m.camera,
+        cursor: m.cursor,
+        mirando: m.mirando,
+        sob: sob(m),
+        apertadas: apertadas(m),
+        cliques: m.cliques,
+        ultima: m.ultima,
+        som: m.som
+    )
+}
+
+// ---------------------------------------------------------------------------
+// A janela
+// ---------------------------------------------------------------------------
+
+// A coluna de fora ocupa a janela, e a fileira parte de altura zero e cresce até
+// ocupá-la (`height(0)` com `grow(1)`): assim a cena tem a altura da janela, e
+// não a do painel, que rola por dentro.
+func view(m: Modelo): ui.View {
+    return ui.column([ui.grow(1), ui.title("Calculadora de Preço 3D — {maquina.visor(m.maquina)}"),
+        ui.clip(m.copia, m.copiaSerie)], [
+        ui.row([ui.height(0), ui.grow(1), ui.align(ui.Align.Stretch())], [
+            palco(m),
+            painel(m)
+        ])
+    ])
+}
+
+func palco(m: Modelo): ui.View {
+    olho := cena.olho(m.camera)
+    mut ui.Attr[dyn] atributos = [
+        ui.grow(1),
+        ui.eye(olho.x, olho.y, olho.z),
+        ui.aim(cena.guinada(m.camera), cena.arfagem(m.camera)),
+        ui.lens(40),
+        ui.fog(140),
+        ui.background(ui.Tone.HEX("#3a4152")),
+        ui.shadows(true),
+        ui.grab(true),
+        ui.crosshair(false),
+        ui.onKeyDown(Msg.Apertou(_)),
+        ui.onKeyUp(Msg.Soltou(_)),
+        ui.onLook(Msg.Olhou(_, _)),
+        ui.onGrab(Msg.Agarrou(_))
+    ]
+    // O relógio só corre enquanto há algo se mexendo sozinho.
+    if m.girar {
+        append(atributos, ui.onFrame(Msg.Passou(_)))
+    }
+    return ui.scene(atributos, cena.formas(quadro(m)))
+}
+
+func legenda(texto: Str): ui.View {
+    return ui.text([ui.size(ui.TextSize.Caption()), ui.tone(ui.Tone.Muted())], texto)
+}
+
+func cartao(titulo: Str, filhos: ui.View[]): ui.View {
+    mut ui.View[dyn] partes = [ui.text([ui.heading(2), ui.size(ui.TextSize.Subtitle())], titulo)]
+    for each f in filhos {
+        append(partes, f)
+    }
+    return ui.column([ui.gap(8), ui.pad(14), ui.background(ui.Tone.Muted())], partes)
+}
+
+// A marca da calculadora (lib/marca.hive), a mesma do ícone do programa.
+func logotipo(): ui.View {
+    mut ui.Mark[dyn] marcas = []
+    for each f in marca.faces() {
+        append(marcas, ui.patch([ui.paint(ui.Tone.RGBA(f.cor.r, f.cor.g, f.cor.b, 255))], marca.pontos(f)))
+    }
+    return ui.canvas([ui.region(0.0, 0.0, 10.0, 10.0), ui.width(56), ui.height(56)], marcas)
+}
+
+func painel(m: Modelo): ui.View {
+    return ui.column([ui.width(400), ui.gap(12), ui.pad(16), ui.scroll(ui.Axis.Vertical())], [
+        ui.row([ui.gap(10), ui.align(ui.Align.Center())], [
+            logotipo(),
+            ui.column([ui.gap(2)], [
+                ui.text([ui.heading(1), ui.size(ui.TextSize.Title())], "Calculadora de Preço 3D"),
+                legenda("Imposto, margem, parcelas, desconto e acréscimo.")
+            ])
+        ]),
+        espelho(m),
+        taxas(m),
+        memoria(m),
+        fita(m),
+        camera(m),
+        ajuda()
+    ])
+}
+
+// O visor de novo, em texto: para ler de perto, copiar, e para leitores de tela.
+func espelho(m: Modelo): ui.View {
+    mut ui.View[dyn] partes = [
+        ui.row([ui.justify(ui.Justify.End())], [
+            ui.text([ui.size(ui.TextSize.Title()), ui.tone(ui.Tone.Good())], maquina.visor(m.maquina))
+        ])
+    ]
+    indicadores := maquina.indicadores(m.maquina)
+    if len(indicadores) > 0 {
+        append(partes, legenda("Indicadores: " + join(indicadores, "  ")))
+    }
+    if m.maquina.erro != "" {
+        append(partes, ui.text([ui.tone(ui.Tone.Danger())], "{m.maquina.erro}. Aperte AC ou CE."))
+    }
+    lista := teclado.teclas()
+    i := sob(m)
+    if lista bounds i {
+        t := lista[i]
+        append(partes, legenda("Sob o cursor: {t.rotulo} — {teclado.descricao(t)} (tecla {teclado.atalho(t)})"))
+    }
+    return cartao("Visor", partes)
+}
+
+func campo(rotulo: Str, valor: Str, ao: func(Str): Msg, erro: Str): ui.View {
+    mut ui.Attr[dyn] atributos = [ui.onInput(ao)]
+    if erro != "" {
+        append(atributos, ui.borderTone(ui.Tone.Danger()))
+        append(atributos, ui.border(2))
+    }
+    mut ui.View[dyn] partes = [legenda(rotulo), ui.input(atributos, valor)]
+    if erro != "" {
+        append(partes, ui.text([ui.size(ui.TextSize.Caption()), ui.tone(ui.Tone.Danger())], erro))
+    }
+    return ui.column([ui.gap(4), ui.grow(1)], partes)
+}
+
+func erroDaTaxa(texto: Str, maximo: Float): Str {
+    lido := formato.lerNumero(texto)
+    if lido is Result.Error(motivo) {
+        return motivo
+    } else if lido is Result.Ok(v) {
+        if v >= maximo {
+            return "precisa ser menor que {formato.numero(maximo)}"
+        }
+        return ""
+    }
+}
+
+func taxas(m: Modelo): ui.View {
+    return cartao("Taxas e arredondamento", [
+        campo("Imposto (%) — usado por TAX+ e TAX−", m.campoImposto, Msg.Imposto(_), erroDaTaxa(m.campoImposto, 1000.0)),
+        campo("Juros ao mês (%) — usados por PARC", m.campoJuros, Msg.Juros(_), erroDaTaxa(m.campoJuros, 100.0)),
+        ui.row([ui.gap(10)], [
+            ui.column([ui.gap(4), ui.grow(1)], [
+                legenda("Casas decimais"),
+                ui.select([ui.onChoose(Msg.Casas(_))], maquina.opcoesCasas(), maquina.nomeCasas(m.maquina.casas))
+            ]),
+            ui.column([ui.gap(4), ui.grow(1)], [
+                legenda("Arredondamento"),
+                ui.select([ui.onChoose(Msg.Arredondamento(_))], maquina.arredondamentos(), m.maquina.arredondamento)
+            ])
+        ]),
+        legenda("Também pela calculadora: digite a taxa e aperte TAXA (imposto) ou JUROS.")
+    ])
+}
+
+func memoria(m: Modelo): ui.View {
+    return cartao("Memória e total geral", [
+        ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+            ui.text([ui.grow(1)], "Memória: {maquina.formatarNa(m.maquina, m.maquina.memoria)}"),
+            ui.button([ui.on(Msg.ZerarMemoria()), ui.disabled(m.maquina.memoria == 0.0)], "Zerar")
+        ]),
+        ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+            ui.text([ui.grow(1)], "Total geral (GT): {maquina.formatarNa(m.maquina, m.maquina.gt)}"),
+            ui.button([ui.on(Msg.ZerarTotal()), ui.disabled(m.maquina.gt == 0.0)], "Zerar")
+        ])
+    ])
+}
+
+func linhaDaFita(l: maquina.Linha): ui.View {
+    mut ui.Tone cor = ui.Tone.Normal()
+    if l.total {
+        cor = ui.Tone.Good()
+    } else if l.simbolo == "E" {
+        cor = ui.Tone.Danger()
+    }
+    return ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+        ui.text([ui.grow(1), ui.size(ui.TextSize.Caption()), ui.tone(ui.Tone.Muted())], l.rotulo),
+        ui.text([ui.tone(cor)], l.valor),
+        ui.row([ui.width(46), ui.justify(ui.Justify.End())], [ui.text([ui.tone(ui.Tone.Muted())], l.simbolo)])
+    ])
+}
+
+// As últimas linhas da fita, a mais nova embaixo.
+func ultimas(fita: maquina.Linha[], quantas: Int): maquina.Linha[dyn] {
+    mut maquina.Linha[dyn] saida = []
+    mut i := 0
+    inicio := len(fita) - quantas
+    for each l in fita {
+        if i >= inicio {
+            append(saida, l)
+        }
+        i++
+    }
+    return saida
+}
+
+func fita(m: Modelo): ui.View {
+    mut ui.View[dyn] linhas = []
+    for each l in ultimas(m.maquina.fita, 80) {
+        append(linhas, linhaDaFita(l))
+    }
+    if len(linhas) == 0 {
+        append(linhas, legenda("A fita anota cada conta aqui."))
+    }
+    vazia := len(m.maquina.fita) == 0
+    mut ui.View[dyn] partes = [
+        ui.column([ui.gap(2), ui.height(260), ui.scroll(ui.Axis.Vertical())], linhas),
+        ui.row([ui.gap(8)], [
+            ui.button([ui.on(Msg.CopiarFita()), ui.disabled(vazia)], "Copiar"),
+            ui.button([ui.on(Msg.SalvarFita()), ui.disabled(vazia)], "Salvar .txt"),
+            ui.button([ui.on(Msg.LimparFita()), ui.disabled(vazia)], "Limpar")
+        ])
+    ]
+    if m.aviso != "" {
+        append(partes, legenda(m.aviso))
+    }
+    return cartao("Fita ({len(m.maquina.fita)} linhas)", partes)
+}
+
+func camera(m: Modelo): ui.View {
+    passo := 0.15
+    return cartao("Câmera", [
+        ui.row([ui.gap(6)], [
+            ui.button([ui.on(Msg.Girar(0.0 - passo, 0.0))], "◀"),
+            ui.button([ui.on(Msg.Girar(passo, 0.0))], "▶"),
+            ui.button([ui.on(Msg.Girar(0.0, passo))], "▲"),
+            ui.button([ui.on(Msg.Girar(0.0, 0.0 - passo))], "▼"),
+            ui.button([ui.on(Msg.Aproximar(0.9))], "+"),
+            ui.button([ui.on(Msg.Aproximar(1.1))], "−"),
+            ui.button([ui.on(Msg.VistaPadrao())], "Padrão")
+        ]),
+        ui.checkbox([ui.onToggle(Msg.GirarSozinha(_))], "Girar sozinha", m.girar),
+        ui.checkbox([ui.onToggle(Msg.Som(_))], "Som das teclas", m.som),
+        legenda("Setas giram, Page Up e Page Down aproximam, Home volta à vista padrão.")
+    ])
+}
+
+func ajuda(): ui.View {
+    return cartao("Como usar", [
+        ui.text([], "Mouse: clique na calculadora para pegar o mouse. Mova para apontar uma tecla e clique para apertar. Botão direito segurado gira a câmera. Esc solta o mouse."),
+        ui.text([], "Teclado: números, vírgula ou ponto, + - * /, Enter ou =, %, Backspace apaga, Delete é CE, C é AC."),
+        ui.text([], "Atalhos de preço: T = TAX+, Y = TAX−, I = TAXA, J = JUROS, U = MU, P = PARC, N = ±, M = M+, K = M−, R = MR, L = MC, G = GT."),
+        legenda("Exemplos: 200 + 10 % → 220 · 200 − 15 % → 170 · 100 TAX+ → 118 (com 18%) · 100 MU 25 = → 133,33 · 2 JUROS 1000 PARC 12 = → 94,56."),
+        legenda("Os dados ficam em estado.json; as fitas salvas, na subpasta fitas. Defina CALC3D_DADOS para usar outra pasta.")
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// O que cada mensagem faz
+// ---------------------------------------------------------------------------
+
+// Aperta uma tecla da calculadora: a conta, a tecla que afunda e o clique.
+proc apertar(m: mut Modelo, i: Int): void {
+    lista := teclado.teclas()
+    if lista bounds i {
+        m.maquina = maquina.pressionar(m.maquina, lista[i].acao)
+        m.cliques = m.cliques + 1
+        m.ultima = i
+    }
+}
+
+proc tecla(m: mut Modelo, nome: Str): void {
+    if nome == "mouse1" {
+        i := sob(m)
+        if i >= 0 {
+            apertar(m, i)
+            m.teclaDoMouse = i
+        }
+        return
+    }
+    if nome == "mouse3" {
+        m.girandoComMouse = true
+        return
+    }
+    if nome == "left" {
+        m.camera = cena.girar(m.camera, -0.12, 0.0)
+    } else if nome == "right" {
+        m.camera = cena.girar(m.camera, 0.12, 0.0)
+    } else if nome == "up" {
+        m.camera = cena.girar(m.camera, 0.0, 0.1)
+    } else if nome == "down" {
+        m.camera = cena.girar(m.camera, 0.0, -0.1)
+    } else if nome == "pageup" {
+        m.camera = cena.aproximar(m.camera, 0.9)
+    } else if nome == "pagedown" {
+        m.camera = cena.aproximar(m.camera, 1.1)
+    } else if nome == "home" {
+        m.camera = cena.cameraPadrao()
+    } else if teclado.acaoDoTeclado(nome) is Result.Ok(a) {
+        lista := teclado.teclas()
+        if teclado.teclaDaAcao(lista, a) is Result.Ok(i) {
+            apertar(m, i)
+            if indexOf(m.seguradas, nome) is Result.Error(_) {
+                append(m.seguradas, nome)
+            }
+        }
+    }
+}
+
+proc soltar(m: mut Modelo, nome: Str): void {
+    if nome == "mouse1" {
+        m.teclaDoMouse = -1
+    } else if nome == "mouse3" {
+        m.girandoComMouse = false
+    } else {
+        // Qualquer tecla solta levanta todas: Shift solto antes de % faria o "%"
+        // nunca ser solto, e a tecla ficaria afundada.
+        Str[dyn] nenhuma = []
+        m.seguradas = nenhuma
+    }
+}
+
+proc aplicar(m: mut Modelo, msg: Msg): void {
+    switch msg {
+        Msg.Apertou(nome) { tecla(m, nome) }
+        Msg.Soltou(nome) { soltar(m, nome) }
+        Msg.Olhou(dx, dy) {
+            if m.girandoComMouse {
+                m.camera = cena.girar(m.camera, dx * 0.006, dy * 0.004)
+            } else if m.mirando {
+                m.cursor = cena.moverCursor(m.cursor, dx, dy, m.camera)
+            }
+        }
+        Msg.Agarrou(sim) {
+            m.mirando = sim
+            if sim == false {
+                m.teclaDoMouse = -1
+                m.girandoComMouse = false
+            }
+        }
+        Msg.Passou(ms) {
+            if m.girar {
+                m.tempo = m.tempo + hive.conv.itf(ms)
+                m.camera = cena.Camera(0.6 * hive.math.sin(m.tempo / 2500.0), m.camera.elevacao, m.camera.distancia)
+            }
+        }
+        Msg.Girar(dAngulo, dElevacao) { m.camera = cena.girar(m.camera, dAngulo, dElevacao) }
+        Msg.Aproximar(fator) { m.camera = cena.aproximar(m.camera, fator) }
+        Msg.VistaPadrao {
+            m.camera = cena.cameraPadrao()
+            m.girar = false
+        }
+        Msg.GirarSozinha(sim) {
+            m.girar = sim
+            m.tempo = 0.0
+            if sim == false {
+                m.camera = cena.Camera(0.0, m.camera.elevacao, m.camera.distancia)
+            }
+        }
+        Msg.Som(sim) { m.som = sim }
+        Msg.Imposto(texto) {
+            m.campoImposto = texto
+            if formato.lerNumero(texto) is Result.Ok(v) && v < 1000.0 {
+                m.maquina.imposto = v
+            }
+        }
+        Msg.Juros(texto) {
+            m.campoJuros = texto
+            if formato.lerNumero(texto) is Result.Ok(v) && v < 100.0 {
+                m.maquina.juros = v
+            }
+        }
+        Msg.Casas(nome) { m.maquina.casas = maquina.casasDoNome(nome) }
+        Msg.Arredondamento(modo) { m.maquina.arredondamento = modo }
+        Msg.ZerarMemoria { m.maquina = maquina.pressionar(m.maquina, maquina.Acao.MemoriaLimpar()) }
+        Msg.ZerarTotal {
+            m.maquina.gt = 0.0
+            m.maquina = maquina.comLinha(m.maquina, maquina.linha("Total geral zerado", "", "GT"))
+        }
+        Msg.CopiarFita {
+            m.copia = maquina.fitaEmTexto(m.maquina.fita)
+            m.copiaSerie = m.copiaSerie + 1
+            m.aviso = "Fita copiada para a área de transferência."
+        }
+        Msg.SalvarFita {
+            saida := estado.exportarFita(m.pasta, m.maquina.fita, hive.time.now())
+            if saida is Result.Ok(caminho) {
+                m.aviso = "Fita salva em {caminho}"
+            } else if saida is Result.Error(motivo) {
+                m.aviso = motivo
+            }
+        }
+        Msg.LimparFita {
+            maquina.Linha[dyn] vazia = []
+            m.maquina.fita = vazia
+            m.aviso = ""
+        }
+    }
+}
+
+// Uma taxa mudada pela calculadora (TAXA, JUROS) aparece no campo do painel.
+proc sincronizarCampos(m: mut Modelo, antes: maquina.Maquina): void {
+    if m.maquina.imposto != antes.imposto {
+        m.campoImposto = formato.numeroCampo(m.maquina.imposto)
+    }
+    if m.maquina.juros != antes.juros {
+        m.campoJuros = formato.numeroCampo(m.maquina.juros)
+    }
+}
+
+// Uma mensagem inteira: aplica, ajusta o painel e grava se algo que se guarda
+// mudou. Mover o cursor não grava nada.
+proc processar(m: mut Modelo, msg: Msg): void {
+    antes := m.maquina
+    salvoAntes := salvoDe(m)
+    aplicar(m, msg)
+    if msg is Msg.Imposto(_) {
+        // O campo é a fonte: não reescrever o que a pessoa está digitando.
+    } else if msg is Msg.Juros(_) {
+    } else {
+        sincronizarCampos(m, antes)
+    }
+    if salvoDe(m) != salvoAntes {
+        gravado := estado.salvar(m.pasta, salvoDe(m))
+        if gravado is Result.Error(motivo) {
+            m.aviso = motivo
+        }
+    }
+}
+
+proc update(m: mut Modelo, msg: Msg): Msg {
+    processar(m, msg)
+    return msg
+}
+
+// ---------------------------------------------------------------------------
+// Demonstração
+// ---------------------------------------------------------------------------
+
+// Um roteiro de teclas, separadas por espaço, aplicado ao abrir — o que a
+// variável CALC3D_DEMO pede. Usa os nomes do teclado do computador ("1", "+",
+// "enter", "t"...), e duas palavras próprias: "@mirar" mostra o cursor, e
+// "@sobre:ROTULO" põe o cursor sobre a tecla com esse rótulo.
+proc demonstrar(m: mut Modelo, roteiro: Str): void {
+    for each passo in split(roteiro, " ") {
+        if passo == "@mirar" {
+            m.mirando = true
+        } else if passo is "@sobre:{rotulo}" {
+            for each t in teclado.teclas() {
+                if t.rotulo == rotulo {
+                    m.cursor = cena.cursorNa(t)
+                }
+            }
+        } else if passo != "" {
+            tecla(m, passo)
+            soltar(m, passo)
+        }
+    }
+    sincronizarCampos(m, maquina.nova())
+}
+
+// ---------------------------------------------------------------------------
+// Início
+// ---------------------------------------------------------------------------
+
+proc main(): void {
+    pasta := estado.pastaPadrao()
+    carga := estado.carregar(pasta)
+    mut Modelo modelo = inicial(pasta, carga.salvo)
+    modelo.aviso = carga.aviso
+    if hive.env.get("CALC3D_DEMO") is Result.Ok(roteiro) && roteiro != "" {
+        // Uma demonstração parte do estado de fábrica e não mexe no guardado: a
+        // pasta vira uma só dela.
+        modelo = inicial(pasta + "/demonstracao", estado.inicial())
+        demonstrar(modelo, roteiro)
+    }
+    aberta := spawn(ui.window("Calculadora de Preço 3D", view, update), modelo)
+    if aberta is Result.Error(problema) {
+        panic problema
+    }
+}

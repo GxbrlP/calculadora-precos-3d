@@ -1,0 +1,931 @@
+// Os testes da Calculadora de Preço 3D. Rode com:
+//
+//     hive test testes.hive
+//
+// O motor é uma função de uma máquina e uma tecla numa máquina nova, o teclado
+// é geometria, e a janela é um `update` e uma `view` — nada disso precisa de uma
+// janela aberta para ser testado.
+import ./calculadora
+import ./ferramentas/icone
+import ./lib/cena
+import ./lib/estado
+import ./lib/formato
+import ./lib/maquina
+import ./lib/marca
+import ./lib/teclado
+import hive.ui
+
+// ---------------------------------------------------------------------------
+// Ajudantes
+// ---------------------------------------------------------------------------
+
+// As ações de uma sequência escrita como no teclado do computador, separadas
+// por espaço: "2 + 3 enter". "00" é a tecla de dois zeros.
+func acoes(teclas: Str): maquina.Acao[dyn] {
+    mut maquina.Acao[dyn] lista = []
+    for each nome in split(teclas, " ") {
+        if nome == "00" {
+            append(lista, maquina.Acao.DuploZero())
+        } else if nome == "TAX+" {
+            append(lista, maquina.Acao.ComImposto())
+        } else if nome == "TAX-" {
+            append(lista, maquina.Acao.SemImposto())
+        } else if nome == "TAXA" {
+            append(lista, maquina.Acao.DefinirImposto())
+        } else if nome == "JUROS" {
+            append(lista, maquina.Acao.DefinirJuros())
+        } else if nome == "MU" {
+            append(lista, maquina.Acao.Operar(maquina.Op.Margem()))
+        } else if nome == "PARC" {
+            append(lista, maquina.Acao.Operar(maquina.Op.Parcelas()))
+        } else if nome == "M+" {
+            append(lista, maquina.Acao.MemoriaSomar())
+        } else if nome == "M-" {
+            append(lista, maquina.Acao.MemoriaSubtrair())
+        } else if nome == "MR" {
+            append(lista, maquina.Acao.MemoriaLer())
+        } else if nome == "MC" {
+            append(lista, maquina.Acao.MemoriaLimpar())
+        } else if nome == "GT" {
+            append(lista, maquina.Acao.TotalGeral())
+        } else if nome == "AC" {
+            append(lista, maquina.Acao.LimparTudo())
+        } else if nome == "CE" {
+            append(lista, maquina.Acao.LimparEntrada())
+        } else if nome == "±" {
+            append(lista, maquina.Acao.Sinal())
+        } else if nome == "=" {
+            append(lista, maquina.Acao.Igual())
+        } else if teclado.acaoDoTeclado(nome) is Result.Ok(inteira) {
+            append(lista, inteira)
+        } else if nome != "" {
+            for each letra in split(nome, "") {
+                if teclado.acaoDoTeclado(letra) is Result.Ok(a) {
+                    append(lista, a)
+                }
+            }
+        }
+    }
+    return lista
+}
+
+func depois(teclas: Str): maquina.Maquina {
+    return maquina.sequencia(maquina.nova(), acoes(teclas))
+}
+
+func visorDe(teclas: Str): Str {
+    return maquina.visor(depois(teclas))
+}
+
+func centavos(v: Float): Int {
+    return hive.conv.round(v * 100.0)
+}
+
+// Minúsculas, só para os nomes de tecla da ajuda ("Enter", "Backspace", "T").
+func minusculas(texto: Str): Str {
+    de := split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
+    para := split("abcdefghijklmnopqrstuvwxyz", "")
+    mut Str[dyn] letras = []
+    for each letra in split(texto, "") {
+        if indexOf(de, letra) is Result.Ok(i) && para bounds i {
+            append(letras, para[i])
+        } else {
+            append(letras, letra)
+        }
+    }
+    return join(letras, "")
+}
+
+func contem(texto: Str, trecho: Str): Bool {
+    return indexOf(texto, trecho) is Result.Ok(_)
+}
+
+// ---------------------------------------------------------------------------
+// Formatação
+// ---------------------------------------------------------------------------
+
+test "números no formato brasileiro" {
+    assert formato.decimal(1234567.891, 2) == "1.234.567,89"
+    assert formato.decimal(0.6666666666666, 10) == "0,6666666667"
+    assert formato.decimal(-0.004, 2) == "0,00"
+    assert formato.numero(12.5) == "12,5"
+    assert formato.numero(3.0) == "3"
+    assert formato.numeroCampo(1500.0) == "1500"
+    assert formato.porcento(1.99) == "1,99%"
+    assert formato.semZerosFinais("12,500") == "12,5"
+    assert formato.semZerosFinais("10,00") == "10"
+    assert formato.semZerosFinais("100") == "100"
+    assert formato.pontilhado("Total", 9) == "Total ... "
+    assert formato.aDireita("5,00", 6) == "  5,00"
+}
+
+test "campos aceitam vírgula, ponto, R$ e %" {
+    assert formato.lerNumero("18") == Result.Ok(18.0)
+    assert formato.lerNumero("1,99") == Result.Ok(1.99)
+    assert formato.lerNumero("1.99") == Result.Ok(1.99)
+    assert formato.lerNumero("1.500") == Result.Ok(1500.0)
+    assert formato.lerNumero("12%") == Result.Ok(12.0)
+    assert formato.lerNumero("") == Result.Ok(0.0)
+    assert formato.lerNumero("abc") == Result.Error("não é um número")
+    assert formato.lerNumero("-5") == Result.Error("não pode ser negativo")
+}
+
+// ---------------------------------------------------------------------------
+// Digitando
+// ---------------------------------------------------------------------------
+
+test "o visor mostra o que se digita, com ponto de milhar" {
+    assert visorDe("") == "0,00"
+    assert visorDe("1 2 3 4 , 5 6") == "1.234,56"
+    assert visorDe("1234,5 backspace") == "1.234,"
+    assert visorDe("1234,5 backspace backspace") == "1.234"
+    assert visorDe(",") == "0,"
+    assert visorDe(", 5") == "0,5"
+    assert visorDe("0 0 0 7") == "7"
+    assert visorDe("00") == "0"
+    assert visorDe("5 00") == "500"
+    assert visorDe("1,2,3") == "1,23"
+    assert visorDe("5 ±") == "-5"
+    assert visorDe("5 ± ±") == "5"
+    assert visorDe("0 ±") == "0"
+}
+
+test "doze dígitos e nenhum a mais" {
+    assert visorDe("1234567890123") == "123.456.789.012"
+    assert visorDe("12345678901,23") == "12.345.678.901,2"
+    assert maquina.digitosDaEntrada(depois("99999999999999").entrada) == 12
+}
+
+// ---------------------------------------------------------------------------
+// As quatro operações
+// ---------------------------------------------------------------------------
+
+test "execução imediata, como numa calculadora de mesa" {
+    assert visorDe("2 + 3 * 4 =") == "20,00"
+    assert visorDe("2 + 3 x 4 =") == "20,00"
+    assert visorDe("10 - 4 =") == "6,00"
+    assert visorDe("3 - 5 =") == "-2,00"
+    assert visorDe("7 / 2 =") == "3,50"
+    assert visorDe("1,5 * 4 =") == "6,00"
+    assert visorDe("2 + 3 +") == "5,00"
+}
+
+test "um operador logo depois de outro só troca o operador" {
+    m := depois("5 + * 3 =")
+    assert maquina.visor(m) == "15,00"
+    if m.fita is [primeira, ...resto] {
+        assert primeira.simbolo == "×"
+        assert len(resto) == 2
+    } else {
+        assert false
+    }
+}
+
+test "= de novo repete a última operação" {
+    assert visorDe("2 * 3 =") == "6,00"
+    assert visorDe("2 * 3 = =") == "18,00"
+    assert visorDe("2 * 3 = = =") == "54,00"
+    assert visorDe("10 + 5 = = =") == "25,00"
+    assert visorDe("5 * =") == "25,00"
+    assert visorDe("8 + =") == "16,00"
+}
+
+test "CE limpa só o número digitado" {
+    assert visorDe("5 + 3 CE 4 =") == "9,00"
+    assert visorDe("5 + 3 delete 4 =") == "9,00"
+}
+
+test "divisão por zero é erro, e só AC ou CE saem dele" {
+    m := depois("5 / 0 =")
+    assert m.erro == "Divisão por zero"
+    assert maquina.visor(m) == "Erro"
+    assert maquina.visor(maquina.sequencia(m, acoes("7 + 1 ="))) == "Erro"
+    assert maquina.visor(maquina.pressionar(m, maquina.Acao.LimparTudo())) == "0,00"
+    voltou := maquina.sequencia(m, acoes("CE 7 + 1 ="))
+    assert voltou.erro == ""
+    assert maquina.visor(voltou) == "8,00"
+    assert indexOf(maquina.indicadores(m), "E") is Result.Ok(_)
+}
+
+test "mais de doze dígitos é estouro" {
+    m := depois("999999999999 * 10 =")
+    assert m.erro == "Estouro: mais de 12 dígitos"
+    assert maquina.visor(depois("999999999999 + 0 =")) == "999.999.999.999"
+}
+
+// ---------------------------------------------------------------------------
+// Porcentagem
+// ---------------------------------------------------------------------------
+
+test "a porcentagem depende do operador" {
+    assert visorDe("200 + 10 %") == "220,00"
+    assert visorDe("200 - 10 %") == "180,00"
+    assert visorDe("200 * 10 %") == "20,00"
+    assert visorDe("50 / 200 %") == "25,00"
+    assert visorDe("50 %") == "0,50"
+    m := depois("200 - 15 %")
+    assert indexOf(m.fita, maquina.linha("Desconto", "30,00", "−")) is Result.Ok(_)
+    assert centavos(m.gt) == 17000
+}
+
+// ---------------------------------------------------------------------------
+// Imposto, margem e parcelas
+// ---------------------------------------------------------------------------
+
+test "TAX+ soma o imposto e TAX− o tira" {
+    assert visorDe("100 TAX+") == "118,00"
+    assert visorDe("100 TAX+ TAX-") == "100,00"
+    assert visorDe("118 TAX-") == "100,00"
+    m := depois("250 TAX+")
+    assert centavos(maquina.valorAtual(m)) == 29500
+    assert indexOf(m.fita, maquina.linha("Imposto 18%", "45,00", "+")) is Result.Ok(_)
+}
+
+test "o valor do imposto entra na conta seguinte" {
+    assert visorDe("100 TAX+ + 2 =") == "120,00"
+    assert visorDe("50 + 100 TAX+ =") == "168,00"
+}
+
+test "TAXA e JUROS definem as taxas com o valor do visor" {
+    m := depois("12 TAXA")
+    assert centavos(m.imposto) == 1200
+    assert maquina.visor(maquina.sequencia(m, acoes("100 TAX+"))) == "112,00"
+    assert centavos(depois("2,5 JUROS").juros) == 250
+    assert depois("1000 TAXA").erro == "Imposto: de 0 a 999%"
+    assert depois("100 JUROS").erro == "Juros: de 0 a 99% ao mês"
+}
+
+test "MU dá o preço de venda pela margem" {
+    assert visorDe("100 MU 25 =") == "133,33"
+    assert visorDe("60 MU 40 =") == "100,00"
+    assert visorDe("100 MU 0 =") == "100,00"
+    assert depois("100 MU 100 =").erro == "Margem: precisa ser menor que 100%"
+    m := depois("100 MU 25 =")
+    assert indexOf(m.fita, maquina.linha("Margem 25%", "33,33", "lucro")) is Result.Ok(_)
+}
+
+test "PARC calcula a parcela pela tabela Price" {
+    assert visorDe("2 JUROS 1000 PARC 12 =") == "94,56"
+    assert visorDe("0 JUROS 1200 PARC 12 =") == "100,00"
+    assert visorDe("1,99 JUROS 3000 PARC 10 =") == "333,80"
+    assert depois("1000 PARC 0 =").erro == "Parcelas: de 1 a 360"
+    assert depois("1000 PARC 2,5 =").erro == "Parcelas: use um número inteiro"
+    m := depois("2 JUROS 1000 PARC 12 =")
+    assert indexOf(m.fita, maquina.linha("Total a prazo", "1.134,72", "")) is Result.Ok(_)
+    assert indexOf(m.fita, maquina.linha("Juros pagos", "134,72", "")) is Result.Ok(_)
+    assert centavos(maquina.parcela(1000.0, 12, 2.0)) == 9456
+}
+
+// ---------------------------------------------------------------------------
+// Memória e total geral
+// ---------------------------------------------------------------------------
+
+test "memória soma, subtrai, lê e zera" {
+    m := depois("100 M+ 50 M+ 30 M-")
+    assert centavos(m.memoria) == 12000
+    assert maquina.visor(maquina.sequencia(m, acoes("AC MR"))) == "120,00"
+    assert centavos(maquina.sequencia(m, acoes("MC")).memoria) == 0
+    assert indexOf(maquina.indicadores(m), "M") is Result.Ok(_)
+}
+
+test "M+ fecha a conta pendente antes de somar" {
+    m := depois("2 + 3 M+")
+    assert centavos(m.memoria) == 500
+    assert maquina.visor(m) == "5,00"
+}
+
+test "o total geral soma cada resultado, e AC duas vezes o zera" {
+    m := depois("2 + 3 = 10 * 2 =")
+    assert centavos(m.gt) == 2500
+    assert maquina.visor(maquina.sequencia(m, acoes("AC GT"))) == "25,00"
+    assert centavos(maquina.sequencia(m, acoes("AC")).gt) == 2500
+    assert centavos(maquina.sequencia(m, acoes("AC AC")).gt) == 0
+    assert visorDe("2 + 3 = GT * 2 =") == "10,00"
+}
+
+// ---------------------------------------------------------------------------
+// Casas decimais e arredondamento
+// ---------------------------------------------------------------------------
+
+func com(casas: Int, modo: Str, teclas: Str): Str {
+    mut maquina.Maquina m = maquina.nova()
+    m.casas = casas
+    m.arredondamento = modo
+    return maquina.visor(maquina.sequencia(m, acoes(teclas)))
+}
+
+test "arredondamento 5/4, para cima e para baixo" {
+    assert com(2, "5/4 (normal)", "2 / 3 =") == "0,67"
+    assert com(2, "Para cima", "1 / 3 =") == "0,34"
+    assert com(2, "Para baixo", "2 / 3 =") == "0,66"
+    assert com(2, "5/4 (normal)", "0,285 * 1 =") == "0,29"
+    assert com(2, "Para baixo", "0,29 * 1 =") == "0,29"
+    assert com(2, "Para cima", "0,29 * 1 =") == "0,29"
+    assert com(2, "5/4 (normal)", "0 - 2 / 3 =") == "-0,67"
+    assert com(0, "5/4 (normal)", "2 / 3 =") == "1"
+    assert com(4, "5/4 (normal)", "2 / 3 =") == "0,6667"
+    assert com(-1, "5/4 (normal)", "2 / 3 =") == "0,6666666667"
+    assert com(-1, "5/4 (normal)", "1 / 4 =") == "0,25"
+    assert com(-1, "5/4 (normal)", "123456789 / 7 =") == "17.636.684,1429"
+}
+
+test "o que se vê é o que vale" {
+    // 1/3 arredondado a 0,33, vezes 3, é 0,99 — e não 1.
+    assert com(2, "5/4 (normal)", "1 / 3 = * 3 =") == "0,99"
+}
+
+test "nomes das casas decimais" {
+    assert maquina.casasDoNome("Livre") == -1
+    assert maquina.casasDoNome("2") == 2
+    assert maquina.nomeCasas(-1) == "Livre"
+    for each nome in maquina.opcoesCasas() {
+        assert maquina.nomeCasas(maquina.casasDoNome(nome)) == nome
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A fita
+// ---------------------------------------------------------------------------
+
+test "a fita anota cada passo, como numa calculadora que imprime" {
+    m := depois("2 + 3 * 4 =")
+    maquina.Linha[dyn] esperada = [
+        maquina.linha("", "2,00", "+"),
+        maquina.linha("", "3,00", "×"),
+        maquina.linha("", "4,00", "="),
+        maquina.linhaTotal("", "20,00", "*")
+    ]
+    assert m.fita == esperada
+    texto := maquina.fitaEmTexto(m.fita)
+    assert contem(texto, "Total")
+    assert len(split(texto, "\n")) == 5
+}
+
+test "a fita guarda no máximo 500 linhas" {
+    mut maquina.Maquina m = maquina.nova()
+    for i := 0; i < 300; i++ {
+        m = maquina.sequencia(m, acoes("1 + 1 ="))
+    }
+    assert len(m.fita) == maquina.maximoFita()
+    assert centavos(m.gt) == 60000
+}
+
+test "AC não repete a linha de limpeza" {
+    m := depois("5 + 5 = AC AC AC")
+    mut quantas := 0
+    for each l in m.fita {
+        if l.simbolo == "C" {
+            quantas++
+        }
+    }
+    assert quantas == 1
+}
+
+// ---------------------------------------------------------------------------
+// O teclado
+// ---------------------------------------------------------------------------
+
+test "as teclas cobrem a grade de 5 × 7 sem sobrar nem sobrepor" {
+    lista := teclado.teclas()
+    assert len(lista) == 33
+    mut cobertas := 0
+    for linha := 0; linha < 7; linha++ {
+        for coluna := 0; coluna < 5; coluna++ {
+            mut donas := 0
+            for each t in lista {
+                if t.coluna == coluna && linha >= t.linha && linha < t.linha + t.altura {
+                    donas++
+                }
+            }
+            assert donas == 1
+            cobertas++
+        }
+    }
+    assert cobertas == 35
+}
+
+test "o centro de cada tecla é dela, e o vão entre teclas não é de ninguém" {
+    lista := teclado.teclas()
+    mut i := 0
+    for each t in lista {
+        assert teclado.teclaEm(lista, teclado.centroX(t), teclado.centroZ(t)) == Result.Ok(i)
+        i++
+    }
+    if lista is [primeira, ...resto] {
+        vao := teclado.centroX(primeira) + teclado.larguraTecla() / 2.0 + teclado.vaoX() / 2.0
+        assert teclado.teclaEm(lista, vao, teclado.centroZ(primeira)) is Result.Error(_)
+        assert len(resto) > 0
+    }
+    assert teclado.teclaEm(lista, 100.0, 0.0) is Result.Error(_)
+}
+
+test "as teclas altas ocupam duas fileiras" {
+    lista := teclado.teclas()
+    if teclado.teclaDaAcao(lista, maquina.Acao.Igual()) is Result.Ok(i) && lista bounds i {
+        igual := lista[i]
+        assert igual.altura == 2
+        acima := teclado.centroZ(igual) - teclado.fundoTecla() / 2.0
+        abaixo := teclado.centroZ(igual) + teclado.fundoTecla() / 2.0
+        assert teclado.teclaEm(lista, teclado.centroX(igual), acima) == Result.Ok(i)
+        assert teclado.teclaEm(lista, teclado.centroX(igual), abaixo) == Result.Ok(i)
+    } else {
+        assert false
+    }
+}
+
+test "cada tecla do computador faz o que a tecla da calculadora faz" {
+    for each t in teclado.teclas() {
+        assert teclado.descricao(t) != ""
+        atalho := teclado.atalho(t)
+        if t.acao != maquina.Acao.DuploZero() && split(atalho, " ") is [primeiro, ..._resto] {
+            assert teclado.acaoDoTeclado(minusculas(primeiro)) == Result.Ok(t.acao)
+        }
+    }
+    assert teclado.acaoDoTeclado("5") == Result.Ok(maquina.Acao.Digito("5"))
+    assert teclado.acaoDoTeclado("enter") == Result.Ok(maquina.Acao.Igual())
+    assert teclado.acaoDoTeclado(".") == Result.Ok(maquina.Acao.Virgula())
+    assert teclado.acaoDoTeclado("t") == Result.Ok(maquina.Acao.ComImposto())
+    assert teclado.acaoDoTeclado("u") == Result.Ok(maquina.Acao.Operar(maquina.Op.Margem()))
+    assert teclado.acaoDoTeclado("shift") is Result.Error(_)
+    assert teclado.acaoDoTeclado("mouse1") is Result.Error(_)
+}
+
+test "arredondar perto do trilhão não muda o valor" {
+    assert maquina.arredondar(999999999999.0, 2, "5/4 (normal)") == 999999999999.0
+    assert maquina.arredondar(999999999999.0, 2, "Para cima") == 999999999999.0
+    assert maquina.arredondar(123456789012.34, 2, "Para baixo") == 123456789012.34
+}
+
+// ---------------------------------------------------------------------------
+// O visor de sete segmentos
+// ---------------------------------------------------------------------------
+
+test "cada caractere acende seus segmentos" {
+    assert cena.segmentos("8") == "abcdefg"
+    assert cena.segmentos("1") == "bc"
+    assert cena.segmentos("-") == "g"
+    assert cena.segmentos(" ") == ""
+    for each d in split("0123456789Ero", "") {
+        assert cena.segmentos(d) != ""
+    }
+}
+
+test "o visor alinha à direita e põe vírgula e milhar na posição anterior" {
+    c := cena.celulas("1.234,56")
+    assert len(c) == 12
+    mut brancas := 0
+    for each celula in c {
+        if celula == cena.Celula(" ", false, false) {
+            brancas++
+        }
+    }
+    assert brancas == 6
+    mut cena.Celula[dyn] esperadas = [
+        cena.Celula("1", false, true), cena.Celula("2", false, false), cena.Celula("3", false, false),
+        cena.Celula("4", true, false), cena.Celula("5", false, false), cena.Celula("6", false, false)
+    ]
+    mut i := 0
+    for each celula in c {
+        if i >= 6 {
+            assert indexOf(esperadas, celula) is Result.Ok(_)
+        }
+        i++
+    }
+    assert len(esperadas) == 6
+    // Sete segmentos por posição, mais uma marca de milhar e uma vírgula com cauda.
+    assert len(cena.formasDoVisor("1.234,56")) == 12 * 7 + 1 + 2
+    longa := cena.celulas("1234567890123456")
+    assert len(longa) == 12
+    if longa is [primeira, ..._resto] {
+        assert primeira.caractere == "5"
+    } else {
+        assert false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Câmera e cursor
+// ---------------------------------------------------------------------------
+
+func perto(a: Float, b: Float): Bool {
+    return hive.math.abs(a - b) < 0.000001
+}
+
+test "o olho mira sempre o centro da calculadora" {
+    for each c in [cena.cameraPadrao(), cena.Camera(0.5, 0.7, 25.0), cena.Camera(-1.2, 1.4, 13.0)] {
+        o := cena.olho(c)
+        a := cena.alvo()
+        dx := a.x - o.x
+        dy := a.y - o.y
+        dz := a.z - o.z
+        d := hive.math.sqrt(dx * dx + dy * dy + dz * dz)
+        assert perto(d, c.distancia)
+        // A direção que a cena dá a uma guinada e uma arfagem, a mesma conta que
+        // o runtime do Hive faz para os ouvidos da cena.
+        g := cena.guinada(c)
+        p := cena.arfagem(c)
+        assert perto(0.0 - hive.math.sin(g) * hive.math.cos(p), dx / d)
+        assert perto(hive.math.sin(p), dy / d)
+        assert perto(0.0 - hive.math.cos(g) * hive.math.cos(p), dz / d)
+    }
+}
+
+test "a câmera não passa de lado nem para baixo da mesa" {
+    c := cena.girar(cena.cameraPadrao(), 10.0, 10.0)
+    assert perto(c.angulo, 1.45)
+    assert perto(c.elevacao, 1.53)
+    baixa := cena.girar(cena.cameraPadrao(), -10.0, -10.0)
+    assert perto(baixa.angulo, -1.45)
+    assert perto(baixa.elevacao, 0.35)
+    assert perto(cena.aproximar(cena.cameraPadrao(), 0.01).distancia, 12.0)
+    assert perto(cena.aproximar(cena.cameraPadrao(), 100.0).distancia, 40.0)
+}
+
+test "o cursor anda para onde o mouse anda na tela" {
+    c := cena.cameraPadrao()
+    inicio := cena.cursorInicial()
+    direita := cena.moverCursor(inicio, 10.0, 0.0, c)
+    assert direita.x > inicio.x
+    assert perto(direita.z, inicio.z)
+    baixo := cena.moverCursor(inicio, 0.0, 10.0, c)
+    assert baixo.z > inicio.z
+    // Com a câmera de lado, "para a direita na tela" é "para o fundo" na mesa.
+    lado := cena.moverCursor(inicio, 10.0, 0.0, cena.Camera(1.45, 1.0, 18.5))
+    assert lado.z < inicio.z
+    longe := cena.moverCursor(inicio, 100000.0, 100000.0, c)
+    assert perto(longe.x, teclado.maxX())
+    assert perto(longe.z, teclado.maxZ())
+}
+
+func quadroDeTeste(mirando: Bool, sob: Int, apertadas: Int[], cliques: Int, som: Bool): cena.Quadro {
+    mut Int[dyn] lista = []
+    for each i in apertadas {
+        append(lista, i)
+    }
+    return cena.Quadro(maquina.nova(), cena.cameraPadrao(), cena.cursorInicial(), mirando, sob, lista, cliques, 5, som)
+}
+
+test "cores e teclas que afundam" {
+    assert cena.clarear(cena.Cor(0, 0, 0), 0.5) == cena.Cor(128, 128, 128)
+    assert cena.clarear(cena.Cor(200, 100, 0), 0.0) == cena.Cor(200, 100, 0)
+    Int[dyn] nenhuma = []
+    Int[dyn] primeira = [0]
+    solta := quadroDeTeste(true, 1, nenhuma, 0, true)
+    apertada := quadroDeTeste(true, 1, primeira, 0, true)
+    assert cena.topoDaTecla(apertada, 0) < cena.topoDaTecla(solta, 0)
+    assert cena.topoDaTecla(solta, 1) > cena.topoDaTecla(solta, 0)
+}
+
+test "a cena tem o corpo, o visor, as teclas, o cursor e o som" {
+    Int[dyn] nenhuma = []
+    semCursor := len(cena.formas(quadroDeTeste(false, -1, nenhuma, 0, true)))
+    // Corpo, 12 × 7 segmentos, a vírgula de "0,00" (ponto e cauda), o indicador
+    // de taxas, 33 teclas com rótulo e a dica.
+    assert semCursor == len(cena.corpo()) + 12 * 7 + 2 + 1 + 33 * 2 + 1
+    // Mirando: esfera, linha, anel e a dica; tocando: o som.
+    assert len(cena.formas(quadroDeTeste(true, -1, nenhuma, 3, true))) == semCursor + 3 + 1
+    assert len(cena.formas(quadroDeTeste(true, -1, nenhuma, 3, false))) == semCursor + 3
+}
+
+// ---------------------------------------------------------------------------
+// O que fica guardado
+// ---------------------------------------------------------------------------
+
+func pastaDeTeste(nome: Str): Str {
+    return "dados-de-teste/{nome}-{hive.time.now()}"
+}
+
+test "sem arquivo, o estado de fábrica" {
+    carga := estado.carregar(pastaDeTeste("vazio"))
+    assert carga.aviso == ""
+    assert carga.salvo == estado.inicial()
+}
+
+test "gravar e ler devolve o mesmo estado" {
+    pasta := pastaDeTeste("ida-e-volta")
+    mut estado.Salvo s = estado.inicial()
+    s.imposto = 12.5
+    s.memoria = 99.9
+    s.fita = depois("2 + 3 =").fita
+    s.angulo = 0.3
+    s.som = false
+    assert estado.salvar(pasta, s) == Result.Ok(true)
+    assert hive.file.exists(estado.arquivo(pasta) + ".tmp") == false
+    carga := estado.carregar(pasta)
+    assert carga.aviso == ""
+    assert carga.salvo == s
+}
+
+test "um arquivo estragado é guardado à parte e a calculadora abre mesmo assim" {
+    pasta := pastaDeTeste("estragado")
+    _ := hive.file.makeDir(pasta)
+    _ := hive.file.write(estado.arquivo(pasta), "isto não é json")
+    carga := estado.carregar(pasta)
+    assert carga.aviso != ""
+    assert carga.salvo == estado.inicial()
+    if hive.file.list(pasta) is Result.Ok(nomes) {
+        assert len(nomes) == 2
+    } else {
+        assert false
+    }
+}
+
+test "valores fora do lugar voltam ao padrão" {
+    mut estado.Salvo s = estado.inicial()
+    s.imposto = -5.0
+    s.juros = 500.0
+    s.casas = 9
+    s.arredondamento = "qualquer"
+    s.gt = 99999999999999.0
+    assert estado.maquinaDe(s) == maquina.nova()
+}
+
+test "a fita sai num .txt com cabeçalho" {
+    pasta := pastaDeTeste("fita")
+    saida := estado.exportarFita(pasta, depois("100 TAX+").fita, hive.time.now())
+    if saida is Result.Ok(caminho) {
+        lido := hive.file.read(caminho)
+        if lido is Result.Ok(texto) {
+            assert contem(texto, "Calculadora de Preço 3D — fita de")
+            assert contem(texto, "Imposto 18%")
+            assert contem(texto, "118,00")
+        } else {
+            assert false
+        }
+    } else {
+        assert false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A janela
+// ---------------------------------------------------------------------------
+
+func modelo(nome: Str): calculadora.Modelo {
+    return calculadora.inicial(pastaDeTeste(nome), estado.inicial())
+}
+
+proc enviar(m: mut calculadora.Modelo, msgs: calculadora.Msg[]): void {
+    for each msg in msgs {
+        calculadora.processar(m, msg)
+    }
+}
+
+proc digitar(m: mut calculadora.Modelo, teclas: Str): void {
+    for each nome in split(teclas, " ") {
+        calculadora.processar(m, calculadora.Msg.Apertou(nome))
+        calculadora.processar(m, calculadora.Msg.Soltou(nome))
+    }
+}
+
+func indiceDe(rotulo: Str): Int {
+    mut i := 0
+    for each t in teclado.teclas() {
+        if t.rotulo == rotulo {
+            return i
+        }
+        i++
+    }
+    return -1
+}
+
+test "o teclado do computador aperta as teclas e as afunda enquanto seguradas" {
+    mut m := modelo("teclado")
+    digitar(m, "1 + 2 enter")
+    assert maquina.visor(m.maquina) == "3,00"
+    calculadora.processar(m, calculadora.Msg.Apertou("7"))
+    Int[dyn] sete = [indiceDe("7")]
+    assert calculadora.apertadas(m) == sete
+    assert m.ultima == indiceDe("7")
+    calculadora.processar(m, calculadora.Msg.Soltou("7"))
+    assert len(calculadora.apertadas(m)) == 0
+    calculadora.processar(m, calculadora.Msg.Apertou("shift"))
+    assert len(calculadora.apertadas(m)) == 0
+    assert m.cliques == 5
+}
+
+test "o mouse aponta, aperta e solta" {
+    mut m := modelo("mouse")
+    sete := indiceDe("7")
+    lista := teclado.teclas()
+    if lista bounds sete {
+        // Sem o mouse preso, o cursor não anda e não há tecla sob ele.
+        calculadora.processar(m, calculadora.Msg.Olhou(50.0, 0.0))
+        assert m.cursor == cena.cursorInicial()
+        assert calculadora.sob(m) == -1
+        calculadora.processar(m, calculadora.Msg.Agarrou(true))
+        m.cursor = cena.cursorNa(lista[sete])
+        assert calculadora.sob(m) == sete
+        calculadora.processar(m, calculadora.Msg.Apertou("mouse1"))
+        assert maquina.visor(m.maquina) == "7"
+        assert m.teclaDoMouse == sete
+        Int[dyn] soSete = [sete]
+        assert calculadora.apertadas(m) == soSete
+        calculadora.processar(m, calculadora.Msg.Soltou("mouse1"))
+        assert m.teclaDoMouse == -1
+        // Fora das teclas, o clique não aperta nada.
+        m.cursor = cena.Cursor(teclado.minX(), teclado.minZ())
+        calculadora.processar(m, calculadora.Msg.Apertou("mouse1"))
+        assert maquina.visor(m.maquina) == "7"
+        calculadora.processar(m, calculadora.Msg.Olhou(30.0, 0.0))
+        assert m.cursor.x > teclado.minX()
+        calculadora.processar(m, calculadora.Msg.Agarrou(false))
+        assert m.mirando == false
+        assert m.teclaDoMouse == -1
+    } else {
+        assert false
+    }
+}
+
+test "botão direito segurado gira a câmera, e as setas também" {
+    mut m := modelo("camera")
+    inicio := m.camera
+    calculadora.processar(m, calculadora.Msg.Agarrou(true))
+    enviar(m, [calculadora.Msg.Apertou("mouse3"), calculadora.Msg.Olhou(50.0, 0.0)])
+    assert m.camera.angulo > inicio.angulo
+    assert m.cursor == cena.cursorInicial()
+    calculadora.processar(m, calculadora.Msg.Soltou("mouse3"))
+    digitar(m, "left left up pageup")
+    assert m.camera.elevacao > inicio.elevacao
+    assert m.camera.distancia < inicio.distancia
+    digitar(m, "home")
+    assert m.camera == cena.cameraPadrao()
+    enviar(m, [calculadora.Msg.Girar(0.3, 0.0), calculadora.Msg.Aproximar(1.1)])
+    assert m.camera.angulo > 0.0
+    calculadora.processar(m, calculadora.Msg.VistaPadrao())
+    assert m.camera == cena.cameraPadrao()
+}
+
+test "girar sozinha anda com o relógio, e só quando ligado" {
+    mut m := modelo("girar")
+    calculadora.processar(m, calculadora.Msg.Passou(1000))
+    assert m.camera == cena.cameraPadrao()
+    calculadora.processar(m, calculadora.Msg.GirarSozinha(true))
+    calculadora.processar(m, calculadora.Msg.Passou(1000))
+    assert m.camera.angulo > 0.0
+    calculadora.processar(m, calculadora.Msg.GirarSozinha(false))
+    assert m.camera.angulo == 0.0
+}
+
+test "o painel muda as taxas, e as teclas TAXA e JUROS mudam o painel" {
+    mut m := modelo("taxas")
+    calculadora.processar(m, calculadora.Msg.Imposto("12,5"))
+    assert m.maquina.imposto == 12.5
+    calculadora.processar(m, calculadora.Msg.Imposto("abc"))
+    assert m.maquina.imposto == 12.5
+    assert m.campoImposto == "abc"
+    calculadora.processar(m, calculadora.Msg.Juros("2"))
+    assert m.maquina.juros == 2.0
+    digitar(m, "1 5 i 3 j")
+    assert m.campoImposto == "15"
+    assert m.campoJuros == "3"
+    enviar(m, [calculadora.Msg.Casas("Livre"), calculadora.Msg.Arredondamento("Para cima")])
+    assert m.maquina.casas == -1
+    assert m.maquina.arredondamento == "Para cima"
+}
+
+test "memória, total geral e fita pelo painel" {
+    mut m := modelo("painel")
+    digitar(m, "5 0 m 2 + 3 enter")
+    assert m.maquina.memoria == 50.0
+    assert m.maquina.gt == 5.0
+    enviar(m, [calculadora.Msg.ZerarMemoria(), calculadora.Msg.ZerarTotal()])
+    assert m.maquina.memoria == 0.0
+    assert m.maquina.gt == 0.0
+    calculadora.processar(m, calculadora.Msg.CopiarFita())
+    assert m.copiaSerie == 1
+    assert contem(m.copia, "Total geral zerado")
+    calculadora.processar(m, calculadora.Msg.SalvarFita())
+    assert contem(m.aviso, "Fita salva em ")
+    if hive.file.list(estado.pastaDasFitas(m.pasta)) is Result.Ok(nomes) {
+        assert len(nomes) == 1
+    } else {
+        assert false
+    }
+    calculadora.processar(m, calculadora.Msg.LimparFita())
+    assert len(m.maquina.fita) == 0
+}
+
+test "o estado vai para o disco quando muda, e mexer o cursor não grava" {
+    mut m := modelo("disco")
+    enviar(m, [calculadora.Msg.Agarrou(true), calculadora.Msg.Olhou(5.0, 5.0)])
+    assert hive.file.exists(estado.arquivo(m.pasta)) == false
+    digitar(m, "4 2 m")
+    assert hive.file.exists(estado.arquivo(m.pasta))
+    carga := estado.carregar(m.pasta)
+    assert carga.salvo.memoria == 42.0
+    assert carga.salvo == calculadora.salvoDe(m)
+    reaberto := calculadora.inicial(m.pasta, carga.salvo)
+    assert reaberto.maquina.memoria == 42.0
+    assert len(reaberto.maquina.fita) == len(m.maquina.fita)
+}
+
+test "o roteiro de demonstração" {
+    mut m := modelo("demo")
+    calculadora.demonstrar(m, "@mirar @sobre:TAX+ 1 0 0 t")
+    assert m.mirando
+    assert calculadora.sob(m) == indiceDe("TAX+")
+    assert maquina.visor(m.maquina) == "118,00"
+    assert len(calculadora.apertadas(m)) == 0
+}
+
+test "a janela desenha o painel com o que a máquina diz" {
+    mut m := modelo("view")
+    digitar(m, "2 j 1 0 0 0 p 1 2 enter")
+    pagina := ui.html(calculadora.view(m))
+    assert contem(pagina, "Calculadora de Preço 3D")
+    assert contem(pagina, "94,56")
+    assert contem(pagina, "Total a prazo")
+    assert contem(pagina, "1.134,72")
+    calculadora.processar(m, calculadora.Msg.Agarrou(true))
+    lista := teclado.teclas()
+    if lista bounds 0 {
+        m.cursor = cena.cursorNa(lista[0])
+    }
+    assert contem(ui.html(calculadora.view(m)), "Sob o cursor: MC")
+}
+
+// ---------------------------------------------------------------------------
+// A marca e o ícone
+// ---------------------------------------------------------------------------
+
+test "a marca cabe no quadrado de 10 × 10" {
+    lista := marca.faces()
+    assert len(lista) == 8 + 4 * 5
+    for each f in lista {
+        for each p in [f.a, f.b, f.c, f.d] {
+            assert p.x >= 0.0 && p.x <= 10.0
+            assert p.y >= 0.0 && p.y <= 10.0
+        }
+        assert len(marca.pontos(f)) == 8
+    }
+    // O meio do quadrado cai na calculadora.
+    assert marca.corEm(lista, 5.0, 5.0) is Result.Ok(_)
+    assert marca.corEm(lista, 0.2, 0.2) is Result.Error(_)
+}
+
+test "CRC-32 e Adler-32 dão os valores de referência" {
+    assert icone.crc32(hive.conv.bytesOf("123456789")) == 0xCBF4_3926
+    assert icone.crc32(hive.conv.bytesOf("")) == 0
+    assert icone.adler32(hive.conv.bytesOf("Wikipedia")) == 0x11E6_0398
+    assert icone.adler32(hive.conv.bytesOf("")) == 1
+}
+
+test "o fluxo zlib sem compressão" {
+    UInt8[dyn] tres = [1, 2, 3]
+    UInt8[dyn] esperado = [0x78, 0x01, 0x01, 0x03, 0x00, 0xFC, 0xFF, 1, 2, 3, 0x00, 0x0D, 0x00, 0x07]
+    assert icone.zlib(tres) == esperado
+    // Um byte além do limite de um bloco abre um segundo bloco.
+    mut UInt8[dyn] grande = []
+    for i := 0; i < 65536; i++ {
+        append(grande, UInt8(i))
+    }
+    fluxo := icone.zlib(grande)
+    assert len(fluxo) == 2 + 5 + 65535 + 5 + 1 + 4
+    if fluxo is [0x78, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x00, ..._resto] {
+        assert true
+    } else {
+        assert false
+    }
+}
+
+test "o ícone é um PNG RGBA de 256×256, transparente nos cantos" {
+    bytes := icone.png()
+    assert len(bytes) == 8 + 25 + 12 + 2 + 256 * (1 + 256 * 4) + 5 * 5 + 4 + 12
+    if bytes is <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13: UInt32, "IHDR", largura: UInt32, altura: UInt32, profundidade, tipo, ...resto>> {
+        assert largura == 256
+        assert altura == 256
+        assert profundidade == 8
+        assert tipo == 6
+        assert len(resto) > 0
+    } else {
+        assert false
+    }
+    faces := marca.faces()
+    assert icone.amostra(faces, 1.0, 1.0).a == 0.0
+    assert icone.amostra(faces, 128.0, 128.0).a == 1.0
+    assert icone.amostra(faces, 20.0, 128.0).a == 1.0
+}
+
+// ---------------------------------------------------------------------------
+// O README
+// ---------------------------------------------------------------------------
+
+test "os exemplos do README dão o que o README diz" {
+    assert visorDe("2 + 3 * 4 =") == "20,00"
+    assert visorDe("200 + 10 %") == "220,00"
+    assert visorDe("200 - 15 %") == "170,00"
+    assert visorDe("200 * 10 %") == "20,00"
+    assert visorDe("50 / 200 %") == "25,00"
+    assert visorDe("100 TAX+") == "118,00"
+    assert visorDe("118 TAX-") == "100,00"
+    assert centavos(depois("12 TAXA").imposto) == 1200
+    assert visorDe("100 MU 25 =") == "133,33"
+    assert visorDe("2 JUROS 1000 PARC 12 =") == "94,56"
+    assert visorDe("2 * 3 =") == "6,00"
+    assert visorDe("2 * 3 = =") == "18,00"
+    assert visorDe("2 * 3 = = =") == "54,00"
+    assert visorDe("100 M+ 30 M- MR") == "70,00"
+    assert centavos(depois("5 + 5 = AC AC").gt) == 0
+    assert visorDe("250 TAX+ 1 0 0 0 + 1 5 %") == "1.150,00"
+}
