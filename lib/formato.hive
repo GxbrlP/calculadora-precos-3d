@@ -1,0 +1,165 @@
+// Números no padrão brasileiro — 1.234.567,89 — e a leitura do que se digita
+// nos campos do painel.
+//
+// Tudo aqui é puro: nada lê nem escreve arquivo.
+
+// Um inteiro não negativo com ponto a cada três dígitos: 1234567 → "1.234.567".
+func agrupar(n: Int): Str {
+    digitos := split(hive.conv.its(n), "")
+    total := len(digitos)
+    mut Str[dyn] partes = []
+    mut i := 0
+    for each d in digitos {
+        if i > 0 && (total - i) % 3 == 0 {
+            append(partes, ".")
+        }
+        append(partes, d)
+        i++
+    }
+    return join(partes, "")
+}
+
+// Um inteiro não negativo com zeros à esquerda até ter `casas` dígitos.
+func preencher(n: Int, casas: Int): Str {
+    mut texto := hive.conv.its(n)
+    for ; len(texto) < casas; {
+        texto = "0" + texto
+    }
+    return texto
+}
+
+// Um número com `casas` casas decimais (0 a 11), vírgula decimal e ponto de
+// milhar, arredondado meio-para-longe-do-zero. Quem chama garante que o número
+// com essas casas cabe em 18 dígitos, o que a calculadora, de 12, sempre cumpre.
+func decimal(valor: Float, casas: Int): Str {
+    mut c := casas
+    if c < 0 {
+        c = 0
+    }
+    if c > 11 {
+        c = 11
+    }
+    fator := 10 ** c
+    n := hive.conv.round(valor * hive.conv.itf(fator))
+    mut sinal := ""
+    mut a := n
+    if n < 0 {
+        sinal = "-"
+        a = -n
+    }
+    if c == 0 {
+        return sinal + agrupar(a)
+    }
+    return "{sinal}{agrupar(a / fator)},{preencher(a % fator, c)}"
+}
+
+// Sem os zeros que sobram no fim das casas decimais, nem a vírgula sozinha:
+// "12,50" → "12,5", "3,00" → "3", "1.200" → "1.200".
+func semZerosFinais(texto: Str): Str {
+    if indexOf(texto, ",") is Result.Error(_) {
+        return texto
+    }
+    mut t := texto
+    for ; t is "{resto}0"; {
+        if t is "{resto}0" {
+            t = resto
+        }
+    }
+    if t is "{resto}," {
+        return resto
+    }
+    return t
+}
+
+// Até duas casas, sem zeros sobrando: 12.5 → "12,5", 3.0 → "3", 0.85 → "0,85".
+func numero(valor: Float): Str {
+    return semZerosFinais(decimal(valor, 2))
+}
+
+// Como `numero`, sem ponto de milhar — o que vai para dentro de um campo, para
+// que o que a tela mostra seja lido de volta exatamente igual.
+func numeroCampo(valor: Float): Str {
+    return replaceAll(numero(valor), ".", "")
+}
+
+// Uma porcentagem: 18 → "18%", 1.99 → "1,99%".
+func porcento(valor: Float): Str {
+    return numero(valor) + "%"
+}
+
+// Data e hora locais, no formato brasileiro.
+func dataHora(instante: Int): Str {
+    return hive.time.format(instante, "%d/%m/%Y %H:%M")
+}
+
+// Texto completado com pontos até `largura` caracteres, para a fita em .txt.
+func pontilhado(texto: Str, largura: Int): Str {
+    mut Str[dyn] partes = [texto, " "]
+    mut tamanho := len(texto) + 1
+    for ; tamanho < largura; {
+        append(partes, ".")
+        tamanho++
+    }
+    append(partes, " ")
+    return join(partes, "")
+}
+
+// Texto completado com espaços à esquerda até `largura` caracteres.
+func aDireita(texto: Str, largura: Int): Str {
+    mut Str[dyn] partes = []
+    mut tamanho := len(texto)
+    for ; tamanho < largura; {
+        append(partes, " ")
+        tamanho++
+    }
+    append(partes, texto)
+    return join(partes, "")
+}
+
+// ---------------------------------------------------------------------------
+// Leitura de números
+// ---------------------------------------------------------------------------
+
+// O que foi digitado, no formato que `hive.conv.stf` entende. Aceita o jeito
+// brasileiro e o internacional:
+//   "1.234,56" → "1234.56"     "12,5" → "12.5"     "0.85" → "0.85"
+//   "1.500"    → "1500"        (um ponto seguido de exatamente três dígitos,
+//                               sem vírgula, é separador de milhar)
+//   "R$ 35"    → "35"          "15%" → "15"
+func normalizarNumero(texto: Str): Str {
+    mut t := replaceAll(texto, " ", "")
+    t = replaceAll(t, "\t", "")
+    t = replaceAll(t, "R$", "")
+    t = replaceAll(t, "r$", "")
+    t = replaceAll(t, "%", "")
+    if indexOf(t, ",") is Result.Ok(_) {
+        return replaceAll(replaceAll(t, ".", ""), ",", ".")
+    }
+    partes := split(t, ".")
+    if len(partes) > 2 {
+        return replaceAll(t, ".", "")
+    }
+    if partes is [inteiro, fracao] && len(fracao) == 3 && inteiro bounds 0 && inteiro[0] != "0" && inteiro[0] != "-" {
+        return inteiro + fracao
+    }
+    return t
+}
+
+// Um número não negativo. Campo vazio vale zero.
+func lerNumero(texto: Str): Result<Float, Str> {
+    t := normalizarNumero(texto)
+    if t == "" {
+        return Result.Ok(0.0)
+    }
+    lido := hive.conv.stf(t)
+    if lido is Result.Ok(v) {
+        if v >= 0.0 && v < 1000000000000.0 {
+            return Result.Ok(v)
+        }
+        if v < 0.0 {
+            return Result.Error("não pode ser negativo")
+        }
+        return Result.Error("valor fora do intervalo")
+    }
+    return Result.Error("não é um número")
+}

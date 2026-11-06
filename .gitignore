@@ -1,0 +1,12 @@
+# O que o compilador Hive gera ao lado de cada ponto de entrada
+*.hive-build/
+# *.exe
+/calculadora
+/calculadora-*-*
+ferramentas/icone
+ferramentas/icone-*-*
+*-analysis.html
+
+# Dados que os testes gravam, e a pasta sugerida para desenvolver
+dados-de-teste/
+dados-dev/

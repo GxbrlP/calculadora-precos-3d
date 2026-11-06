@@ -1,0 +1,421 @@
+// A calculadora em três dimensões: uma calculadora de mesa sobre uma mesa de
+// madeira, com corpo, placa metálica, visor de cristal líquido de sete
+// segmentos, trinta e três teclas que afundam quando apertadas e um cursor que
+// desliza sobre a face.
+//
+// Tudo aqui é uma `func` do estado: a cena é refeita inteira a cada quadro, e
+// nada guarda o que havia no quadro anterior. Unidades em metros "de cena" e
+// ângulos em radianos, como em `hive.ui.scene`.
+import ./maquina
+import ./teclado
+import hive.ui
+
+// ---------------------------------------------------------------------------
+// Câmera
+// ---------------------------------------------------------------------------
+
+// A câmera gira em volta da calculadora: `angulo` em volta do eixo vertical
+// (0 é de frente), `elevacao` acima da mesa (π/2 é de cima), `distancia` até o
+// centro.
+type Camera {
+    angulo: Float
+    elevacao: Float
+    distancia: Float
+}
+
+type Ponto3 {
+    x: Float
+    y: Float
+    z: Float
+}
+
+func cameraPadrao(): Camera {
+    return Camera(0.0, 1.0, 18.5)
+}
+
+func alvo(): Ponto3 {
+    return Ponto3(0.0, 0.9, 0.4)
+}
+
+func limitado(v: Float, menor: Float, maior: Float): Float {
+    return hive.math.clamp(v, menor, maior)
+}
+
+// A câmera girada, sem passar de lado nem para baixo da mesa.
+func girar(c: Camera, dAngulo: Float, dElevacao: Float): Camera {
+    return Camera(
+        limitado(c.angulo + dAngulo, -1.45, 1.45),
+        limitado(c.elevacao + dElevacao, 0.35, 1.53),
+        c.distancia
+    )
+}
+
+func aproximar(c: Camera, fator: Float): Camera {
+    return Camera(c.angulo, c.elevacao, limitado(c.distancia * fator, 12.0, 40.0))
+}
+
+func olho(c: Camera): Ponto3 {
+    a := alvo()
+    horizontal := c.distancia * hive.math.cos(c.elevacao)
+    return Ponto3(
+        a.x + horizontal * hive.math.sin(c.angulo),
+        a.y + c.distancia * hive.math.sin(c.elevacao),
+        a.z + horizontal * hive.math.cos(c.angulo)
+    )
+}
+
+// Para onde o olho mira, como `ui.aim` quer: guinada e arfagem. A cena olha para
+// -z com guinada 0, e o olho está do lado +z do alvo, então a guinada é o
+// próprio ângulo e a arfagem é a elevação para baixo.
+func guinada(c: Camera): Float {
+    return c.angulo
+}
+
+func arfagem(c: Camera): Float {
+    return 0.0 - c.elevacao
+}
+
+// O cursor andando sobre a face, na direção em que o mouse andou na tela: com a
+// câmera girada, "para a direita na tela" já não é +x na mesa.
+type Cursor {
+    x: Float
+    z: Float
+}
+
+func cursorInicial(): Cursor {
+    return Cursor(0.0, 2.0)
+}
+
+func moverCursor(cursor: Cursor, dx: Float, dy: Float, c: Camera): Cursor {
+    sensibilidade := 0.012 * c.distancia / 18.5
+    s := hive.math.sin(c.angulo)
+    co := hive.math.cos(c.angulo)
+    x := cursor.x + sensibilidade * (dx * co + dy * s)
+    z := cursor.z + sensibilidade * (dy * co - dx * s)
+    return Cursor(limitado(x, teclado.minX(), teclado.maxX()), limitado(z, teclado.minZ(), teclado.maxZ()))
+}
+
+// O cursor no centro de uma tecla.
+func cursorNa(t: teclado.Tecla): Cursor {
+    return Cursor(teclado.centroX(t), teclado.centroZ(t))
+}
+
+// ---------------------------------------------------------------------------
+// Cores
+// ---------------------------------------------------------------------------
+
+type Cor {
+    r: Int
+    g: Int
+    b: Int
+}
+
+func tom(c: Cor): ui.Tone {
+    return ui.Tone.RGBA(c.r, c.g, c.b, 255)
+}
+
+// A cor clareada `fracao` do caminho até o branco.
+func clarear(c: Cor, fracao: Float): Cor {
+    return Cor(
+        c.r + hive.conv.round(hive.conv.itf(255 - c.r) * fracao),
+        c.g + hive.conv.round(hive.conv.itf(255 - c.g) * fracao),
+        c.b + hive.conv.round(hive.conv.itf(255 - c.b) * fracao)
+    )
+}
+
+func corDaTecla(e: teclado.Estilo): Cor {
+    switch e {
+        teclado.Estilo.Numero { return Cor(52, 58, 68) }
+        teclado.Estilo.Operador { return Cor(71, 85, 105) }
+        teclado.Estilo.Funcao { return Cor(30, 64, 120) }
+        teclado.Estilo.Memoria { return Cor(39, 44, 52) }
+        teclado.Estilo.Limpar { return Cor(185, 64, 44) }
+        teclado.Estilo.Igual { return Cor(21, 128, 61) }
+    }
+}
+
+func corDoRotulo(e: teclado.Estilo): Str {
+    switch e {
+        teclado.Estilo.Numero { return "#f8fafc" }
+        teclado.Estilo.Operador { return "#f8fafc" }
+        teclado.Estilo.Funcao { return "#e0f2fe" }
+        teclado.Estilo.Memoria { return "#fbbf24" }
+        teclado.Estilo.Limpar { return "#ffffff" }
+        teclado.Estilo.Igual { return "#ffffff" }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// O visor de sete segmentos
+// ---------------------------------------------------------------------------
+
+//      a
+//    f   b
+//      g
+//    e   c
+//      d
+func segmentos(caractere: Str): Str {
+    if caractere == "0" { return "abcdef" }
+    if caractere == "1" { return "bc" }
+    if caractere == "2" { return "abdeg" }
+    if caractere == "3" { return "abcdg" }
+    if caractere == "4" { return "bcfg" }
+    if caractere == "5" { return "acdfg" }
+    if caractere == "6" { return "acdefg" }
+    if caractere == "7" { return "abc" }
+    if caractere == "8" { return "abcdefg" }
+    if caractere == "9" { return "abcdfg" }
+    if caractere == "-" { return "g" }
+    if caractere == "E" { return "adefg" }
+    if caractere == "r" { return "eg" }
+    if caractere == "o" { return "cdeg" }
+    return ""
+}
+
+// Uma posição do visor: o caractere, e se tem vírgula ou marca de milhar depois.
+type Celula {
+    caractere: Str
+    virgula: Bool
+    milhar: Bool
+}
+
+func posicoes(): Int {
+    return 12
+}
+
+// O texto do visor nas doze posições, alinhado à direita. Vírgula e ponto de
+// milhar não ocupam posição: acendem uma marca na posição anterior.
+func celulas(texto: Str): Celula[dyn] {
+    mut Celula[dyn] lidas = []
+    for each letra in split(texto, "") {
+        ultima := len(lidas) - 1
+        if letra == "," && lidas bounds ultima {
+            lidas[ultima].virgula = true
+        } else if letra == "." && lidas bounds ultima {
+            lidas[ultima].milhar = true
+        } else if letra != "," && letra != "." {
+            append(lidas, Celula(letra, false, false))
+        }
+    }
+    mut Celula[dyn] saida = []
+    faltam := posicoes() - len(lidas)
+    for i := 0; i < faltam; i++ {
+        append(saida, Celula(" ", false, false))
+    }
+    mut i := 0
+    for each c in lidas {
+        // Mais de doze não cabe; fica o que está à direita, que é o que muda.
+        if i >= len(lidas) - posicoes() {
+            append(saida, c)
+        }
+        i++
+    }
+    return saida
+}
+
+func acesa(segmentosAcesos: Str, segmento: Str): Bool {
+    return indexOf(segmentosAcesos, segmento) is Result.Ok(_)
+}
+
+func centroDoVisor(): Float {
+    return -4.85
+}
+
+func xDaPosicao(i: Int): Float {
+    return -2.97 + hive.conv.itf(i) * 0.54
+}
+
+// Um segmento: uma caixa fina sobre o cristal, acesa (escura) ou apagada (o
+// fantasma que todo visor de cristal líquido tem).
+func segmento(x: Float, z: Float, largura: Float, fundo: Float, aceso: Bool): ui.Shape {
+    mut cor := Cor(156, 174, 148)
+    if aceso {
+        cor = Cor(28, 40, 30)
+    }
+    return ui.box([ui.at(x, 1.03, z), ui.paint(tom(cor)), ui.surface(ui.Surface.Gloss())], largura, 0.016, fundo)
+}
+
+func formasDoDigito(c: Celula, i: Int): ui.Shape[dyn] {
+    x := xDaPosicao(i)
+    z := centroDoVisor()
+    largura := 0.34
+    altura := 0.95
+    espessura := 0.075
+    acesos := segmentos(c.caractere)
+    meia := largura / 2.0
+    quarto := altura / 4.0
+    mut ui.Shape[dyn] formas = [
+        segmento(x, z - altura / 2.0, largura - espessura, espessura, acesa(acesos, "a")),
+        segmento(x + meia, z - quarto, espessura, altura / 2.0 - espessura, acesa(acesos, "b")),
+        segmento(x + meia, z + quarto, espessura, altura / 2.0 - espessura, acesa(acesos, "c")),
+        segmento(x, z + altura / 2.0, largura - espessura, espessura, acesa(acesos, "d")),
+        segmento(x - meia, z + quarto, espessura, altura / 2.0 - espessura, acesa(acesos, "e")),
+        segmento(x - meia, z - quarto, espessura, altura / 2.0 - espessura, acesa(acesos, "f")),
+        segmento(x, z, largura - espessura, espessura, acesa(acesos, "g"))
+    ]
+    if c.virgula {
+        append(formas, segmento(x + meia + 0.1, z + altura / 2.0, 0.09, 0.09, true))
+        append(formas, segmento(x + meia + 0.07, z + altura / 2.0 + 0.11, 0.045, 0.12, true))
+    }
+    if c.milhar {
+        append(formas, segmento(x + meia + 0.1, z - altura / 2.0 + 0.04, 0.05, 0.13, true))
+    }
+    return formas
+}
+
+func formasDoVisor(texto: Str): ui.Shape[dyn] {
+    mut ui.Shape[dyn] formas = []
+    mut i := 0
+    for each c in celulas(texto) {
+        for each f in formasDoDigito(c, i) {
+            append(formas, f)
+        }
+        i++
+    }
+    return formas
+}
+
+// ---------------------------------------------------------------------------
+// A cena inteira
+// ---------------------------------------------------------------------------
+
+// O que a cena precisa saber para se desenhar.
+type Quadro {
+    maquina: maquina.Maquina
+    camera: Camera
+    cursor: Cursor
+    mirando: Bool
+    sob: Int
+    apertadas: Int[dyn]
+    cliques: Int
+    ultima: Int
+    som: Bool
+}
+
+func topoDaPlaca(): Float {
+    return 0.96
+}
+
+func alturaTecla(): Float {
+    return 0.36
+}
+
+func apertada(q: Quadro, i: Int): Bool {
+    return indexOf(q.apertadas, i) is Result.Ok(_)
+}
+
+// O topo de uma tecla, que afunda quando apertada e sobe um pouco sob o cursor.
+func topoDaTecla(q: Quadro, i: Int): Float {
+    mut y := topoDaPlaca() + alturaTecla()
+    if apertada(q, i) {
+        y = y - 0.2
+    } else if q.mirando && q.sob == i {
+        y = y + 0.05
+    }
+    return y
+}
+
+func formasDaTecla(q: Quadro, t: teclado.Tecla, i: Int): ui.Shape[dyn] {
+    x := teclado.centroX(t)
+    z := teclado.centroZ(t)
+    topo := topoDaTecla(q, i)
+    mut cor := corDaTecla(t.estilo)
+    if apertada(q, i) {
+        cor = clarear(cor, 0.12)
+    } else if q.mirando && q.sob == i {
+        cor = clarear(cor, 0.28)
+    }
+    return [
+        ui.box([ui.at(x, topo - alturaTecla() / 2.0, z), ui.paint(tom(cor)), ui.surface(ui.Surface.Gloss())],
+            teclado.larguraTecla(), alturaTecla(), teclado.fundo(t)),
+        ui.label([ui.at(x, topo + 0.24, z), ui.paint(ui.Tone.HEX(corDoRotulo(t.estilo)))], t.rotulo)
+    ]
+}
+
+func corpo(): ui.Shape[dyn] {
+    return [
+        ui.ground([ui.surface(ui.Surface.Planks()), ui.paint(ui.Tone.HEX("#7a4a2a"))], 90.0, 90.0),
+        ui.box([ui.at(0.0, 0.45, 0.0), ui.paint(ui.Tone.HEX("#23272e")), ui.surface(ui.Surface.Gloss())], 8.4, 0.9, 13.0),
+        ui.box([ui.at(0.0, 0.93, 0.0), ui.paint(ui.Tone.HEX("#3b4049")), ui.surface(ui.Surface.Metal())], 8.0, 0.06, 12.6),
+        // A moldura e o cristal do visor.
+        ui.box([ui.at(0.0, 0.985, -5.0), ui.paint(ui.Tone.HEX("#15181d")), ui.surface(ui.Surface.Gloss())], 7.6, 0.05, 2.4),
+        ui.box([ui.at(0.0, 1.0, -5.0), ui.paint(ui.Tone.HEX("#a9bba0")), ui.surface(ui.Surface.Gloss())], 7.0, 0.04, 2.0),
+        // A célula solar, com suas divisões.
+        ui.box([ui.at(2.3, 0.975, -3.5), ui.paint(ui.Tone.HEX("#2e2433")), ui.surface(ui.Surface.Gloss())], 2.6, 0.03, 0.55),
+        ui.box([ui.at(1.65, 0.992, -3.5), ui.paint(ui.Tone.HEX("#4b3f52")), ui.surface(ui.Surface.Gloss())], 0.03, 0.01, 0.55),
+        ui.box([ui.at(2.3, 0.992, -3.5), ui.paint(ui.Tone.HEX("#4b3f52")), ui.surface(ui.Surface.Gloss())], 0.03, 0.01, 0.55),
+        ui.box([ui.at(2.95, 0.992, -3.5), ui.paint(ui.Tone.HEX("#4b3f52")), ui.surface(ui.Surface.Gloss())], 0.03, 0.01, 0.55),
+        // Os pés de borracha.
+        ui.cylinder([ui.at(-3.6, 0.02, -5.8), ui.paint(ui.Tone.HEX("#111111")), ui.surface(ui.Surface.Rubber())], 0.35, 0.04),
+        ui.cylinder([ui.at(3.6, 0.02, -5.8), ui.paint(ui.Tone.HEX("#111111")), ui.surface(ui.Surface.Rubber())], 0.35, 0.04),
+        ui.label([ui.at(-2.3, 1.5, -3.5), ui.paint(ui.Tone.HEX("#e5e7eb"))], "PREÇO 3D")
+    ]
+}
+
+// Os indicadores no alto do visor, e as taxas em vigor à direita.
+func formasDosIndicadores(m: maquina.Maquina): ui.Shape[dyn] {
+    mut ui.Shape[dyn] formas = []
+    mut x := -3.0
+    for each nome in maquina.indicadores(m) {
+        append(formas, ui.label([ui.at(x, 1.27, -5.68), ui.paint(ui.Tone.HEX("#f1f5ee"))], nome))
+        x = x + 0.75
+    }
+    append(formas, ui.label([ui.at(2.15, 1.27, -5.68), ui.paint(ui.Tone.HEX("#f1f5ee"))],
+        "IMP {maquina.formatar(m.imposto, -1)}%  J {maquina.formatar(m.juros, -1)}%"))
+    return formas
+}
+
+func formasDoCursor(q: Quadro): ui.Shape[dyn] {
+    if q.mirando == false {
+        return [ui.label([ui.at(0.0, 1.9, 7.4), ui.paint(ui.Tone.HEX("#fde68a"))], "Clique para usar o mouse")]
+    }
+    x := q.cursor.x
+    z := q.cursor.z
+    mut chao := topoDaPlaca()
+    if q.sob >= 0 {
+        chao = topoDaTecla(q, q.sob)
+    }
+    return [
+        ui.sphere([ui.at(x, chao + 0.95, z), ui.paint(ui.Tone.HEX("#ef4444")), ui.surface(ui.Surface.Gloss())], 0.13),
+        ui.line([ui.paint(ui.Tone.HEX("#f87171"))], x, chao + 0.95, z, x, chao + 0.01, z),
+        ui.cylinder([ui.at(x, chao + 0.012, z), ui.paint(ui.Tone.RGBA(239, 68, 68, 130))], 0.3, 0.012),
+        ui.label([ui.at(0.0, 1.9, 7.4), ui.paint(ui.Tone.HEX("#fde68a"))], "Esc solta · botão direito gira")
+    ]
+}
+
+// O clique de uma tecla, de onde a tecla está. Um nome novo a cada clique é um
+// som novo: um som de batida toca uma vez quando o nome aparece.
+func formasDoSom(q: Quadro): ui.Shape[dyn] {
+    lista := teclado.teclas()
+    if q.som && q.cliques > 0 && lista bounds q.ultima {
+        t := lista[q.ultima]
+        return [ui.sound([ui.at(teclado.centroX(t), 1.2, teclado.centroZ(t)), ui.voice(ui.Voice.Impact()),
+            ui.pitch(1.8), ui.volume(0.45)], "clique-{q.cliques}")]
+    }
+    ui.Shape[dyn] nenhuma = []
+    return nenhuma
+}
+
+func formas(q: Quadro): ui.Shape[dyn] {
+    mut ui.Shape[dyn] todas = corpo()
+    for each f in formasDoVisor(maquina.visor(q.maquina)) {
+        append(todas, f)
+    }
+    for each f in formasDosIndicadores(q.maquina) {
+        append(todas, f)
+    }
+    mut i := 0
+    for each t in teclado.teclas() {
+        for each f in formasDaTecla(q, t, i) {
+            append(todas, f)
+        }
+        i++
+    }
+    for each f in formasDoCursor(q) {
+        append(todas, f)
+    }
+    for each f in formasDoSom(q) {
+        append(todas, f)
+    }
+    return todas
+}

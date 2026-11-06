@@ -1,0 +1,144 @@
+// A marca da calculadora: uma calculadora de mesa em perspectiva isométrica —
+// corpo, visor e teclas — desenhada como uma lista de quadriláteros num quadrado
+// de 10 × 10, do fundo para a frente.
+//
+// É a mesma lista para o logotipo do painel (um `canvas`) e para o ícone do
+// programa (`ferramentas/icone.hive`, que a rasteriza num PNG), para que os dois
+// sejam sempre o mesmo desenho.
+
+type Ponto2 {
+    x: Float
+    y: Float
+}
+
+type Cor {
+    r: Int
+    g: Int
+    b: Int
+}
+
+// Um quadrilátero convexo, com os vértices em ordem, e sua cor.
+type Face {
+    a: Ponto2
+    b: Ponto2
+    c: Ponto2
+    d: Ponto2
+    cor: Cor
+}
+
+// A calculadora: largura 1 (x), profundidade 1,45 (z) e espessura 0,16 (y).
+func largura(): Float {
+    return 1.0
+}
+
+func profundidade(): Float {
+    return 1.45
+}
+
+func espessura(): Float {
+    return 0.16
+}
+
+// Um ponto do espaço levado ao quadrado de 10 × 10: x para a direita e para
+// baixo, z para a esquerda e para baixo, y para cima — a isometria clássica, de
+// 30 graus.
+func projetar(x: Float, y: Float, z: Float): Ponto2 {
+    escala := 3.9
+    cosseno := 0.8660254
+    seno := 0.5
+    largo := (largura() + profundidade()) * cosseno * escala
+    alto := (largura() + profundidade()) * seno * escala + espessura() * escala
+    origemX := 5.0 - largo / 2.0 + profundidade() * cosseno * escala
+    origemY := 5.0 - alto / 2.0 + espessura() * escala
+    return Ponto2(origemX + (x - z) * cosseno * escala, origemY + (x + z) * seno * escala - y * escala)
+}
+
+// Um retângulo da face de cima, em frações da largura (u) e da profundidade (v),
+// um tico acima dela.
+func naFace(u0: Float, v0: Float, u1: Float, v1: Float, altura: Float, cor: Cor): Face {
+    y := espessura() + altura
+    l := largura()
+    p := profundidade()
+    return Face(
+        projetar(u0 * l, y, v0 * p),
+        projetar(u1 * l, y, v0 * p),
+        projetar(u1 * l, y, v1 * p),
+        projetar(u0 * l, y, v1 * p),
+        cor
+    )
+}
+
+func corDaTecla(coluna: Int, linha: Int): Cor {
+    if linha == 0 {
+        return Cor(30, 64, 120)
+    }
+    if linha == 1 && coluna == 0 {
+        return Cor(185, 64, 44)
+    }
+    if linha == 4 && coluna == 3 {
+        return Cor(21, 128, 61)
+    }
+    if coluna == 3 {
+        return Cor(100, 116, 139)
+    }
+    return Cor(71, 78, 90)
+}
+
+func faces(): Face[dyn] {
+    l := largura()
+    p := profundidade()
+    e := espessura()
+    mut Face[dyn] lista = [
+        // As duas laterais visíveis e a face de cima.
+        Face(projetar(0.0, e, p), projetar(l, e, p), projetar(l, 0.0, p), projetar(0.0, 0.0, p), Cor(24, 27, 32)),
+        Face(projetar(l, e, 0.0), projetar(l, e, p), projetar(l, 0.0, p), projetar(l, 0.0, 0.0), Cor(17, 19, 23)),
+        Face(projetar(0.0, e, 0.0), projetar(l, e, 0.0), projetar(l, e, p), projetar(0.0, e, p), Cor(52, 57, 66)),
+        // A moldura e o cristal do visor.
+        naFace(0.07, 0.05, 0.93, 0.29, 0.0, Cor(21, 24, 29)),
+        naFace(0.1, 0.075, 0.9, 0.265, 0.0, Cor(169, 187, 160)),
+        // Três dígitos acesos no visor.
+        naFace(0.62, 0.12, 0.66, 0.22, 0.0, Cor(28, 40, 30)),
+        naFace(0.7, 0.12, 0.74, 0.22, 0.0, Cor(28, 40, 30)),
+        naFace(0.78, 0.12, 0.86, 0.14, 0.0, Cor(28, 40, 30))
+    ]
+    // A grade de teclas: quatro colunas e cinco fileiras.
+    for linha := 0; linha < 5; linha++ {
+        for coluna := 0; coluna < 4; coluna++ {
+            u0 := 0.08 + hive.conv.itf(coluna) * 0.215
+            v0 := 0.35 + hive.conv.itf(linha) * 0.125
+            append(lista, naFace(u0, v0, u0 + 0.18, v0 + 0.095, 0.035, corDaTecla(coluna, linha)))
+        }
+    }
+    return lista
+}
+
+// De que lado da reta a→b o ponto está: o sinal do produto vetorial.
+func lado(a: Ponto2, b: Ponto2, x: Float, y: Float): Float {
+    return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
+}
+
+func contem(f: Face, x: Float, y: Float): Bool {
+    s1 := lado(f.a, f.b, x, y)
+    s2 := lado(f.b, f.c, x, y)
+    s3 := lado(f.c, f.d, x, y)
+    s4 := lado(f.d, f.a, x, y)
+    positivos := s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0 && s4 >= 0.0
+    negativos := s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0 && s4 <= 0.0
+    return positivos || negativos
+}
+
+// A cor do desenho num ponto do quadrado: a face mais à frente que o cobre.
+func corEm(lista: Face[], x: Float, y: Float): Result<Cor, Bool> {
+    mut Result<Cor, Bool> achada = Result.Error(false)
+    for each f in lista {
+        if contem(f, x, y) {
+            achada = Result.Ok(f.cor)
+        }
+    }
+    return achada
+}
+
+// Os quatro vértices de uma face, como um `patch` de canvas os quer.
+func pontos(f: Face): Float[dyn] {
+    return [f.a.x, f.a.y, f.b.x, f.b.y, f.c.x, f.c.y, f.d.x, f.d.y]
+}
