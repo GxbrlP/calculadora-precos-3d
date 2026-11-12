@@ -93,7 +93,7 @@ class TaskList(QWidget):
 
     def set_copies(self, copies: int) -> None:
         """Tarefas e materiais extras valem uma vez para o lote inteiro."""
-        copies_text = "1 cópia" if copies == 1 else f"{copies} cópias"
+        copies_text = "1 produto" if copies == 1 else f"{copies} produtos"
         self.box.setTitle(f"Acabamento — para o lote inteiro ({copies_text})")
 
     def tasks(self) -> tuple[FinishingTask, ...]:

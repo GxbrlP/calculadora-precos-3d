@@ -28,7 +28,7 @@ def _percent(fraction: Decimal) -> str:
 
 
 def _copies_text(copies: int) -> str:
-    return "1 cópia" if copies == 1 else f"{copies} cópias"
+    return "1 produto" if copies == 1 else f"{copies} produtos"
 
 
 class CostPanel(QWidget):
