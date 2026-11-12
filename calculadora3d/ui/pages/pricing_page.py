@@ -29,6 +29,7 @@ from calculadora3d.ui.pdf_export import export_quotes_pdf
 from calculadora3d.ui.widgets.cost_panel import CostPanel
 from calculadora3d.ui.widgets.drop_area import DropArea
 from calculadora3d.ui.widgets.slot_table import SlotTable, filament_label
+from calculadora3d.ui.widgets.product_panel import build_pricing_inputs, tier_configs
 from calculadora3d.ui.widgets.task_list import TaskList
 
 NO_PRINTER = "— escolher —"
@@ -86,33 +87,6 @@ def _saved_details(snapshot: dict) -> str:
     if extras:
         lines.append(f"Materiais extras: {brl(extras)}")
     return "\n".join(lines)
-
-
-def tier_configs(settings: Settings) -> tuple[TierConfig, ...]:
-    return (
-        TierConfig("Varejo", settings.retail_margin, None),
-        TierConfig("Atacado", settings.wholesale_margin, settings.wholesale_min_quantity),
-        TierConfig("Mínimo", settings.minimum_margin, None),
-    )
-
-
-def build_pricing_inputs(filaments: Mapping[int, Filament], grams_by_slot: Mapping[int, Decimal],
-                         seconds: int, copies: int, printer: Printer, settings: Settings,
-                         tasks: Sequence[FinishingTask],
-                         extra_materials: Decimal) -> PricingInputs:
-    """Só monta as entradas; toda conta de custo fica em core.pricing."""
-    lines = tuple(
-        filament.as_filament_line(grams_by_slot[slot])
-        for slot, filament in sorted(filaments.items())
-        if grams_by_slot.get(slot, Decimal(0)) > 0
-    )
-    return PricingInputs(
-        filaments=lines, seconds=seconds, copies=copies,
-        printer=printer.as_printer_costs(), kwh_price=settings.kwh_price,
-        failure_rate=settings.failure_rate, labor_hourly=settings.labor_hourly,
-        tasks=tuple(tasks), extra_materials=extra_materials,
-        packaging=settings.packaging,
-    )
 
 
 class PricingPage(QWidget):

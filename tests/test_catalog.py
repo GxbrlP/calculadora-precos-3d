@@ -6,7 +6,7 @@ import pytest
 from decimal import Decimal
 
 from calculadora3d.core.catalog import (Brand, Catalog, Filament, Printer,
-                                        Settings, TaskPreset)
+                                        Settings, TaskPreset, printer_for_model)
 from calculadora3d.core.pricing import FilamentLine, PrinterCosts
 from calculadora3d.core.paths import data_dir, db_path
 
@@ -274,3 +274,12 @@ def test_numero_do_orcamento_so_avanca_quando_confirmado(cat):
     cat.confirm_quote_number(2)
     cat.confirm_quote_number(1)  # confirmação atrasada não volta o contador
     assert cat.next_quote_number() == 3
+
+
+def test_printer_for_model_ignora_caixa_e_espacos():
+    a1 = Printer(1, "A1", " Bambu Lab A1 ", Decimal("120"))
+    p1s = Printer(2, "P1S", "Bambu Lab P1S", Decimal("150"))
+    assert printer_for_model([a1, p1s], "bambu lab a1") == a1
+    assert printer_for_model([a1, p1s], "") is None
+    assert printer_for_model([a1, p1s], None) is None
+    assert printer_for_model([a1], "X1C") is None

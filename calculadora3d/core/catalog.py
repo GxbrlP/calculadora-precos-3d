@@ -1,5 +1,6 @@
 """Catálogo persistente (SQLite): marcas, filamentos, impressoras, ajustes e histórico."""
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from decimal import Decimal
 from pathlib import Path
@@ -152,6 +153,14 @@ def _printer_from_row(r: sqlite3.Row) -> Printer:
     return Printer(r["id"], r["name"], r["model_id"], Decimal(r["average_watts"]))
 
 
+def printer_for_model(printers: Sequence[Printer], model: str | None) -> Printer | None:
+    """Primeira impressora da lista cujo modelo bate, sem diferenciar caixa e espaços."""
+    wanted = (model or "").strip().lower()
+    if not wanted:
+        return None
+    return next((p for p in printers if p.model_id.strip().lower() == wanted), None)
+
+
 class Catalog:
     def __init__(self, db_path: Path) -> None:
         self.connection = sqlite3.connect(db_path)
@@ -243,13 +252,8 @@ class Catalog:
                                     (printer_id,))
 
     def find_printer_by_model(self, model_id: str) -> Printer | None:
-        wanted = model_id.strip().lower()
-        if not wanted:
-            return None
-        row = self.connection.execute(
-            "SELECT * FROM printers WHERE lower(trim(model_id)) = ? ORDER BY id",
-            (wanted,)).fetchone()
-        return _printer_from_row(row) if row else None
+        printers = sorted(self.list_printers(), key=lambda p: p.id)
+        return printer_for_model(printers, model_id)
 
     # Configurações
     def get_settings(self) -> Settings:
