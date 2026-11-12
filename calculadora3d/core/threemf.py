@@ -1,11 +1,7 @@
 import json
-import os.path
-import re
 import zipfile
 import zlib
-from dataclasses import replace
 from decimal import Decimal, InvalidOperation
-from collections.abc import Sequence
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -245,83 +241,4 @@ def read_project(path: Path) -> SlicedProject:
         name=name, source_path=path, printer_model=printer_model,
         plates=(), usage=tuple(usage), is_sliced=False,
         warnings=tuple(warnings), sources=(path,), model_instances=instances,
-    )
-
-
-_PLATE_SUFFIX = re.compile(r"[_\-\s]*plate[_\-\s]*\d+$", re.IGNORECASE)
-_SEPARATORS = "_- ."
-
-
-def _common_name(projects: list[SlicedProject]) -> str:
-    names = [p.name for p in projects]
-    if len(set(names)) == 1:
-        return names[0]
-    stems = [_PLATE_SUFFIX.sub("", _default_name(p.source_path)) for p in projects]
-    prefix = os.path.commonprefix(stems).strip(_SEPARATORS)
-    return prefix or names[0]
-
-
-def _merge_usage(projects: list[SlicedProject]) -> list[FilamentUsage]:
-    merged: dict[int, FilamentUsage] = {}
-    for project in projects:
-        for u in project.usage:
-            previous = merged.get(u.slot)
-            if previous is None:
-                merged[u.slot] = u
-            else:
-                merged[u.slot] = replace(
-                    previous, grams=previous.grams + u.grams,
-                    meters=previous.meters + u.meters)
-    return [merged[s] for s in sorted(merged)]
-
-
-def read_projects(paths: Sequence[Path]) -> SlicedProject:
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    warnings: list[str] = []
-    for raw in paths:
-        path = Path(raw)
-        key = path.resolve()
-        if key in seen:
-            warnings.append(f"arquivo repetido ignorado: {path.name}")
-            continue
-        seen.add(key)
-        unique.append(path)
-    if not unique:
-        raise ThreeMFError("nenhum arquivo .3mf informado")
-
-    projects = [read_project(p) for p in unique]
-    first = projects[0]
-    # índices originais das placas, antes da renumeração abaixo
-    covered = {pl.index for p in projects for pl in p.plates}
-    any_sliced = any(p.is_sliced for p in projects)
-    for project in projects:
-        name = project.source_path.name
-        summed_elsewhere = {_unsliced_warning(i) for i in project.unsliced_plates
-                            if i in covered}
-        for w in project.warnings:
-            if w not in summed_elsewhere:
-                warnings.append(f"{name}: {w}")
-        if any_sliced and not project.is_sliced:
-            warnings.append(f"{name} não foi fatiado: some o peso e o tempo dele"
-                            " aos valores pré-preenchidos")
-        if project.printer_model != first.printer_model:
-            warnings.append(
-                f"{project.source_path.name}: impressora diferente "
-                f"({project.printer_model or 'desconhecida'}) da do primeiro arquivo "
-                f"({first.printer_model or 'desconhecida'})")
-
-    plates = [
-        replace(plate, index=i)
-        for i, plate in enumerate((pl for p in projects for pl in p.plates), start=1)
-    ]
-    return SlicedProject(
-        name=_common_name(projects), source_path=first.source_path,
-        printer_model=first.printer_model, plates=tuple(plates),
-        usage=tuple(_merge_usage(projects)),
-        is_sliced=all(p.is_sliced for p in projects),
-        warnings=tuple(warnings), sources=tuple(unique),
-        model_instances=sum(p.model_instances for p in projects),
-        unsliced_plates=tuple(sorted(
-            {i for p in projects for i in p.unsliced_plates} - covered)),
     )

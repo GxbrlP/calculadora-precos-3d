@@ -8,8 +8,8 @@ Os valores ficam em um banco SQLite local; nada é enviado para a internet.
 ## Arquivo de entrada
 
 O app espera o `.gcode.3mf` exportado do Bambu Studio com **Ctrl+G** (Exportar
-G-code fatiado). Cada arquivo contém uma placa; arraste vários arquivos para
-somar as placas de um mesmo produto.
+G-code fatiado). Cada arquivo é um produto; para um produto de várias placas,
+exporte no Bambu Studio um único `.gcode.3mf` com todas as placas fatiadas.
 
 Um projeto salvo com **Ctrl+S** não serve para ler peso e tempo: o Bambu Studio
 descarta o fatiamento ao salvar. Nesse caso o app avisa e pede o peso e o tempo

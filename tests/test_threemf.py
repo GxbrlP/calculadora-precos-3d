@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from calculadora3d.core.threemf import ThreeMFError, read_project, read_projects
+from calculadora3d.core.threemf import ThreeMFError, read_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -204,65 +204,6 @@ def test_prediction_infinito_levanta_threemferror():
         read_project(_fixture_sintetica(prediction="Infinity"))
 
 
-def test_soma_placas_de_dois_arquivos():
-    a = _fixture_sintetica(prediction=1000, used_g=["10"])
-    b = _fixture_sintetica(prediction=2000, used_g=["5"])
-    p = read_projects([a, b])
-    assert p.total_seconds == 3000
-    assert p.total_grams == Decimal("15")
-    assert len(p.plates) == 2
-    assert [pl.index for pl in p.plates] == [1, 2]
-    assert p.sources == (a, b)
-    assert p.source_path == a
-
-
-def test_mescla_slots_pelo_id_somando_gramas():
-    a = _fixture_sintetica(used_g={1: "10", 2: "4"})
-    b = _fixture_sintetica(used_g={1: "6"})
-    p = read_projects([a, b])
-    assert {u.slot: u.grams for u in p.usage} == {1: Decimal("16"), 2: Decimal("4")}
-    assert p.color_count == 2
-
-
-def test_impressoras_diferentes_geram_aviso():
-    p = read_projects([_fixture_sintetica(printer="Bambu Lab A1"),
-                       _fixture_sintetica(printer="Bambu Lab P1S")])
-    assert any("impressora" in w.lower() for w in p.warnings)
-    assert p.printer_model == "Bambu Lab A1"
-
-
-def test_arquivo_repetido_e_ignorado_com_aviso():
-    a = _fixture_sintetica(prediction=1000, used_g=["10"])
-    p = read_projects([a, a])
-    assert p.total_seconds == 1000
-    assert p.sources == (a,)
-    assert any("repetido" in w.lower() for w in p.warnings)
-
-
-def test_lista_vazia_levanta_threemferror():
-    with pytest.raises(ThreeMFError):
-        read_projects([])
-
-
-def test_um_arquivo_so_tem_o_mesmo_resultado_de_read_project():
-    a = FIXTURES / "sliced_mono_1plate.3mf"
-    assert read_projects([a]).total_grams == read_project(a).total_grams
-
-
-def test_nome_comum_de_placas_do_mesmo_projeto():
-    d = Path(tempfile.mkdtemp(prefix="calc3d_"))
-    a, b = d / "faca_plate_1.gcode.3mf", d / "faca_plate_2.gcode.3mf"
-    for caminho in (a, b):
-        caminho.write_bytes(_fixture_sintetica().read_bytes())
-    assert read_projects([a, b]).name == "faca"
-
-
-def test_nao_fatiado_em_qualquer_arquivo_torna_o_total_nao_fatiado():
-    p = read_projects([_fixture_sintetica(), FIXTURES / "saved_project_3colors.3mf"])
-    assert p.is_sliced is False
-    assert p.model_instances == 1
-
-
 def test_densidade_e_custo_do_slot_vem_do_project_settings():
     caminho = FIXTURES / "sliced_mono_1plate.3mf"
     with zipfile.ZipFile(caminho) as z:
@@ -310,34 +251,6 @@ def test_placa_fatiada_completa_nao_gera_aviso_de_dado_ausente():
     assert not any("não informa" in w for w in p.warnings)
 
 
-def test_placa_de_outro_arquivo_nao_gera_aviso_de_placa_nao_fatiada():
-    um, dois = _placa_exportada(1, prediction=1000), _placa_exportada(2, prediction=2000)
-    assert any("placa 2 não foi fatiada" in w for w in read_project(um).warnings)
-    p = read_projects([um, dois])
-    assert p.total_seconds == 3000
-    assert not any("não foi fatiada" in w for w in p.warnings)
-
-
-def test_placa_ausente_de_todos_os_arquivos_continua_avisando():
-    p = read_projects([_placa_exportada(1, total=3), _placa_exportada(2, total=3)])
-    avisos = [w for w in p.warnings if "não foi fatiada" in w]
-    assert avisos and all("placa 3" in w for w in avisos)
-
-
 def test_placa_nao_fatiada_de_um_arquivo_so_continua_avisando():
-    p = read_projects([_placa_exportada(1)])
+    p = read_project(_placa_exportada(1))
     assert any("placa 2 não foi fatiada" in w for w in p.warnings)
-
-
-def test_mistura_fatiado_e_nao_fatiado_avisa_para_somar_o_nao_fatiado():
-    salvo = FIXTURES / "saved_project_3colors.3mf"
-    p = read_projects([_fixture_sintetica(), salvo])
-    assert p.is_sliced is False
-    assert (f"{salvo.name} não foi fatiado: some o peso e o tempo dele"
-            " aos valores pré-preenchidos") in p.warnings
-
-
-def test_so_arquivos_nao_fatiados_nao_avisam_para_somar():
-    p = read_projects([FIXTURES / "saved_project_3colors.3mf",
-                       FIXTURES / "model_only_3colors.3mf"])
-    assert not any("pré-preenchidos" in w for w in p.warnings)
