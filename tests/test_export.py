@@ -8,9 +8,9 @@ from calculadora3d.core.quotes import build_snapshot
 def _snapshot(retail="30.00", name="Suporte", tasks=None, copies=2):
     tasks = [FinishingTask("Lixar", 30), FinishingTask("Pintar", 15)] if tasks is None else tasks
     breakdown = CostBreakdown(
-        material=Decimal("4"), energy=Decimal("1"), depreciation=Decimal("2"),
+        material=Decimal("4"), energy=Decimal("1"),
         failure=Decimal("0.5"), labor=Decimal("10"), extras=Decimal("1.5"),
-        total=Decimal("19"))
+        total=Decimal("17"))
     tiers = [
         PriceTier("Varejo", Decimal("0.6"), Decimal(retail), Decimal(retail) / 2, None),
         PriceTier("Atacado", Decimal("0.4"), Decimal("200.00"), Decimal("20.00"), 10),

@@ -16,8 +16,7 @@ from calculadora3d.core.pricing import (
 
 
 def _printer():
-    return PrinterCosts(Decimal("3000"), Decimal("4000"),
-                        Decimal("120"), Decimal("0.10"))
+    return PrinterCosts(Decimal("120"))
 
 
 def _inputs(**overrides):
@@ -52,12 +51,11 @@ def test_material_soma_varias_cores():
 
 
 def test_custos_de_maquina_e_falha():
-    # 2 h, 120 W, R$ 0,95/kWh → energia = 0,228
-    # depreciação = 2 × (3000/4000 + 0,10) = 1,70
+    # 2 h, 120 W, R$ 0,95/kWh → energia = 0,228; a impressora só custa energia
     c = compute_cost(_inputs(seconds=7200, failure_rate=Decimal("0.05")))
     assert c.energy == Decimal("0.228")
-    assert c.depreciation == Decimal("1.70")
-    assert c.failure == (c.material + c.energy + c.depreciation) * Decimal("0.05")
+    assert c.failure == (c.material + c.energy) * Decimal("0.05")
+    assert not hasattr(c, "depreciation")
 
 
 def test_mao_de_obra_soma_minutos_das_tarefas():
@@ -74,7 +72,7 @@ def test_extras_somam_materiais_e_embalagem():
 
 def test_total_e_a_soma_das_partes():
     c = compute_cost(_inputs())
-    assert c.total == c.material + c.energy + c.depreciation + c.failure + c.labor + c.extras
+    assert c.total == c.material + c.energy + c.failure + c.labor + c.extras
 
 
 def test_rolo_com_peso_zero_levanta_pricingerror():
@@ -87,15 +85,9 @@ def test_filamento_com_preco_zero_levanta_pricingerror():
         compute_cost(_inputs(filaments=(FilamentLine(Decimal("10"), Decimal("0"), Decimal("1000")),)))
 
 
-def test_vida_util_zero_levanta_pricingerror():
-    printer = PrinterCosts(Decimal("3000"), Decimal("0"), Decimal("120"), Decimal("0.10"))
-    with pytest.raises(PricingError, match="vida útil"):
-        compute_cost(_inputs(printer=printer))
-
-
 def test_tempo_zero_nao_gera_custo_de_maquina():
     c = compute_cost(_inputs(seconds=0))
-    assert c.energy == Decimal("0") and c.depreciation == Decimal("0")
+    assert c.energy == Decimal("0")
 
 
 @pytest.mark.parametrize("overrides", [

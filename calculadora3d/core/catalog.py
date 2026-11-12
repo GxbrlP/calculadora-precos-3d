@@ -26,10 +26,7 @@ CREATE TABLE IF NOT EXISTS printers (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     model_id TEXT NOT NULL DEFAULT '',
-    purchase_price TEXT NOT NULL,
-    lifetime_hours TEXT NOT NULL,
-    average_watts TEXT NOT NULL,
-    maintenance_per_hour TEXT NOT NULL
+    average_watts TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -50,6 +47,9 @@ CREATE TABLE IF NOT EXISTS quotes (
     snapshot_json TEXT NOT NULL
 );
 """
+
+# Colunas da impressora que deixaram de existir (só a energia entra no custo).
+_DROPPED_PRINTER_COLUMNS = ("purchase_price", "lifetime_hours", "maintenance_per_hour")
 
 
 @dataclass(frozen=True)
@@ -85,14 +85,10 @@ class Printer:
     id: int | None
     name: str
     model_id: str
-    purchase_price: Decimal
-    lifetime_hours: Decimal
     average_watts: Decimal
-    maintenance_per_hour: Decimal
 
     def as_printer_costs(self) -> PrinterCosts:
-        return PrinterCosts(self.purchase_price, self.lifetime_hours,
-                            self.average_watts, self.maintenance_per_hour)
+        return PrinterCosts(self.average_watts)
 
 
 @dataclass(frozen=True)
@@ -139,9 +135,7 @@ def _filament_from_row(r: sqlite3.Row) -> Filament:
 
 
 def _printer_from_row(r: sqlite3.Row) -> Printer:
-    return Printer(r["id"], r["name"], r["model_id"], Decimal(r["purchase_price"]),
-                   Decimal(r["lifetime_hours"]), Decimal(r["average_watts"]),
-                   Decimal(r["maintenance_per_hour"]))
+    return Printer(r["id"], r["name"], r["model_id"], Decimal(r["average_watts"]))
 
 
 class Catalog:
@@ -153,6 +147,11 @@ class Catalog:
     def migrate(self) -> None:
         with self.connection:
             self.connection.executescript(_SCHEMA)
+            existing = {r["name"] for r in
+                        self.connection.execute("PRAGMA table_info(printers)")}
+            for column in _DROPPED_PRINTER_COLUMNS:
+                if column in existing:
+                    self.connection.execute(f"ALTER TABLE printers DROP COLUMN {column}")
 
     def close(self) -> None:
         self.connection.close()
@@ -218,10 +217,7 @@ class Catalog:
     def upsert_printer(self, p: Printer) -> int:
         return self._insert_or_update("printers", p.id, {
             "name": p.name, "model_id": p.model_id,
-            "purchase_price": str(p.purchase_price),
-            "lifetime_hours": str(p.lifetime_hours),
-            "average_watts": str(p.average_watts),
-            "maintenance_per_hour": str(p.maintenance_per_hour)})
+            "average_watts": str(p.average_watts)})
 
     def list_printers(self) -> list[Printer]:
         rows = self.connection.execute("SELECT * FROM printers ORDER BY name, id")

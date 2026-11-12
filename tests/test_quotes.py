@@ -25,8 +25,7 @@ def _breakdown(roll_price="100"):
     return compute_cost(PricingInputs(
         filaments=(FilamentLine(Decimal("40"), Decimal(roll_price), Decimal("1000")),),
         seconds=3600, copies=1,
-        printer=PrinterCosts(Decimal("4500"), Decimal("5000"), Decimal("120"),
-                             Decimal("0.30")),
+        printer=PrinterCosts(Decimal("120")),
         kwh_price=Decimal("0.95"), failure_rate=Decimal("0.05"),
         labor_hourly=Decimal("25"), tasks=(FinishingTask("Lixar", 30),),
         extra_materials=Decimal("0"), packaging=Decimal("1.50")))
@@ -128,3 +127,11 @@ def test_snapshot_project_monta_uma_placa_com_tempo_peso_e_copias():
         (1, "PLA", "#FF0000FF", Decimal("40.5")),
         (4, "PETG", "#000000FF", Decimal("2.25"))]
     assert project.plates[0].weight_grams == Decimal("42.75")
+
+
+def test_snapshot_antigo_com_depreciacao_ainda_abre():
+    snap = _snap()
+    snap["breakdown"]["depreciation"] = "1.70"
+    breakdown, tiers = snapshot_result(snap)
+    assert breakdown.total == _breakdown().total
+    assert [t.name for t in tiers] == ["Varejo", "Atacado"]

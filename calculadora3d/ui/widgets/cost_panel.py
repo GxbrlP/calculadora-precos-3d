@@ -15,7 +15,6 @@ BLOCKED_STYLE = ("background-color: #fff3b0; color: #4a3b00; padding: 8px;"
 COST_LINES = (
     ("material", "Material"),
     ("energy", "Energia"),
-    ("depreciation", "Depreciação"),
     ("failure", "Falha"),
     ("labor", "Mão de obra"),
     ("extras", "Extras"),

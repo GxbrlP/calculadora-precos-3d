@@ -19,10 +19,8 @@ class FilamentLine:
 
 @dataclass(frozen=True)
 class PrinterCosts:
-    purchase_price: Decimal
-    lifetime_hours: Decimal
+    """A impressora entra no custo só pela energia que consome."""
     average_watts: Decimal
-    maintenance_per_hour: Decimal
 
 
 @dataclass(frozen=True)
@@ -49,7 +47,6 @@ class PricingInputs:
 class CostBreakdown:
     material: Decimal
     energy: Decimal
-    depreciation: Decimal
     failure: Decimal
     labor: Decimal
     extras: Decimal
@@ -66,8 +63,6 @@ def _validate(inputs: PricingInputs) -> None:
             raise PricingError("A gramagem não pode ser negativa.")
     if inputs.seconds < 0:
         raise PricingError("O tempo de impressão não pode ser negativo.")
-    if inputs.printer.lifetime_hours <= _ZERO:
-        raise PricingError("A vida útil da impressora deve ser maior que zero.")
     if not _ZERO <= inputs.failure_rate < 1:
         raise PricingError("A taxa de falha deve estar entre 0 e 1 (exclusive).")
     if any(t.minutes < 0 for t in inputs.tasks):
@@ -76,21 +71,18 @@ def _validate(inputs: PricingInputs) -> None:
 
 def compute_cost(inputs: PricingInputs) -> CostBreakdown:
     _validate(inputs)
-    printer = inputs.printer
     hours = Decimal(inputs.seconds) / Decimal(3600)
 
     material = sum((f.grams * f.roll_price / f.roll_grams
                     for f in inputs.filaments), _ZERO)
-    energy = hours * (printer.average_watts / Decimal(1000)) * inputs.kwh_price
-    depreciation = hours * (printer.purchase_price / printer.lifetime_hours
-                            + printer.maintenance_per_hour)
-    machine_subtotal = material + energy + depreciation
+    energy = hours * (inputs.printer.average_watts / Decimal(1000)) * inputs.kwh_price
+    machine_subtotal = material + energy
     failure = machine_subtotal * inputs.failure_rate
     minutes = sum((t.minutes for t in inputs.tasks), 0)
     labor = Decimal(minutes) / Decimal(60) * inputs.labor_hourly
     extras = inputs.extra_materials + inputs.packaging
     total = machine_subtotal + failure + labor + extras
-    return CostBreakdown(material, energy, depreciation, failure, labor, extras, total)
+    return CostBreakdown(material, energy, failure, labor, extras, total)
 
 
 @dataclass(frozen=True)

@@ -77,8 +77,7 @@ def _filamento(brand_id, brand_name="Bambu Lab", line="PLA Basic", grams="1000",
 
 
 def _impressora(model_id="Bambu Lab A1", pid=None):
-    return Printer(pid, "A1", model_id, Decimal("4500"), Decimal("5000"),
-                   Decimal("120"), Decimal("0.30"))
+    return Printer(pid, "A1", model_id, Decimal("120"))
 
 
 def test_filamento_ida_e_volta_preserva_decimal(cat):
@@ -188,8 +187,7 @@ def test_pontes_para_o_calculo():
     f = _filamento(1, grams="750", price="120")
     assert f.as_filament_line(Decimal("10")) == FilamentLine(
         Decimal("10"), Decimal("120"), Decimal("750"))
-    assert _impressora().as_printer_costs() == PrinterCosts(
-        Decimal("4500"), Decimal("5000"), Decimal("120"), Decimal("0.30"))
+    assert _impressora().as_printer_costs() == PrinterCosts(Decimal("120"))
 
 
 def test_delete_brand_com_filamentos_levanta_value_error(cat):
@@ -215,7 +213,8 @@ def test_impressora_ida_e_volta_e_update(cat):
     pid = cat.upsert_printer(_impressora())
     cat.upsert_printer(_impressora(pid=pid))
     p, = cat.list_printers()
-    assert p.purchase_price == Decimal("4500") and p.maintenance_per_hour == Decimal("0.30")
+    assert (p.name, p.model_id, p.average_watts) == ("A1", "Bambu Lab A1",
+                                                     Decimal("120"))
 
 
 def test_delete_printer_remove_so_a_escolhida(cat):
@@ -223,3 +222,27 @@ def test_delete_printer_remove_so_a_escolhida(cat):
     b = cat.upsert_printer(_impressora("Bambu Lab P1S"))
     cat.delete_printer(a)
     assert [p.id for p in cat.list_printers()] == [b]
+
+
+def test_migrate_remove_custos_antigos_da_impressora(tmp_path):
+    import sqlite3
+    path = tmp_path / "antigo.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE printers (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+            model_id TEXT NOT NULL DEFAULT '', purchase_price TEXT NOT NULL,
+            lifetime_hours TEXT NOT NULL, average_watts TEXT NOT NULL,
+            maintenance_per_hour TEXT NOT NULL);
+        INSERT INTO printers VALUES (7, 'A1', 'Bambu Lab A1', '4500', '5000', '120', '0.30');
+    """)
+    old.commit()
+    old.close()
+    cat = Catalog(path)
+    cat.migrate()
+    colunas = {r["name"] for r in cat.connection.execute("PRAGMA table_info(printers)")}
+    assert colunas == {"id", "name", "model_id", "average_watts"}
+    assert cat.list_printers() == [Printer(7, "A1", "Bambu Lab A1", Decimal("120"))]
+    cat.upsert_printer(Printer(None, "P1S", "Bambu Lab P1S", Decimal("150")))
+    assert len(cat.list_printers()) == 2
+    cat.close()

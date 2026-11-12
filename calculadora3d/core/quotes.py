@@ -50,7 +50,6 @@ def build_snapshot(project_name: str, source_file: str,
         "breakdown": {
             "material": str(breakdown.material),
             "energy": str(breakdown.energy),
-            "depreciation": str(breakdown.depreciation),
             "failure": str(breakdown.failure),
             "labor": str(breakdown.labor),
             "extras": str(breakdown.extras),
@@ -65,7 +64,11 @@ def build_snapshot(project_name: str, source_file: str,
 
 
 def snapshot_result(snapshot: dict) -> tuple[CostBreakdown, tuple[PriceTier, ...]]:
-    """Custos e faixas exatamente como foram salvos, sem recalcular."""
+    """Custos e faixas exatamente como foram salvos, sem recalcular.
+
+    Snapshots antigos podem trazer a chave "depreciation", que não existe mais;
+    ela é ignorada e o total salvo é mantido.
+    """
     saved = snapshot["breakdown"]
     breakdown = CostBreakdown(**{f.name: Decimal(str(saved[f.name]))
                                  for f in fields(CostBreakdown)})
