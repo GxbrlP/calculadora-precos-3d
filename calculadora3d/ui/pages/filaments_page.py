@@ -43,6 +43,8 @@ class FilamentsPage(QWidget):
 
         self.brand_combo = QComboBox()
         self.brand_combo.currentIndexChanged.connect(self._on_brand_changed)
+        self.delete_brand_button = QPushButton("Excluir marca")
+        self.delete_brand_button.clicked.connect(self.delete_brand)
         self.new_brand_edit = QLineEdit()
         self.new_brand_edit.setPlaceholderText("Nome da nova marca")
         self.line_edit = QLineEdit()
@@ -72,8 +74,11 @@ class FilamentsPage(QWidget):
         self.delete_button = QPushButton("Excluir")
         self.delete_button.clicked.connect(self.delete_selected)
 
+        brand_row = QHBoxLayout()
+        brand_row.addWidget(self.brand_combo, 1)
+        brand_row.addWidget(self.delete_brand_button)
         form = QFormLayout()
-        form.addRow("Marca", self.brand_combo)
+        form.addRow("Marca", brand_row)
         form.addRow("", self.new_brand_edit)
         form.addRow("Linha", self.line_edit)
         form.addRow("Tipo", self.type_combo)
@@ -128,7 +133,9 @@ class FilamentsPage(QWidget):
         self._on_brand_changed()
 
     def _on_brand_changed(self) -> None:
-        self.new_brand_edit.setVisible(self.brand_combo.currentText() == NEW_BRAND)
+        is_new = self.brand_combo.currentText() == NEW_BRAND
+        self.new_brand_edit.setVisible(is_new)
+        self.delete_brand_button.setEnabled(not is_new)
 
     def _update_per_kg(self) -> None:
         try:
@@ -255,6 +262,27 @@ class FilamentsPage(QWidget):
                 raise ValueError("Densidade inválida.")
         return Filament(None, 0, "", line, type_, roll_grams, roll_price, density,
                         self.active_check.isChecked()), new_brand
+
+    def delete_brand(self) -> None:
+        name = self.brand_combo.currentText()
+        brand = next((b for b in self.catalog.list_brands() if b.name == name), None)
+        if brand is None:
+            return
+        answer = QMessageBox.question(
+            self, "Excluir marca", f"Excluir a marca “{name}” do catálogo?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.catalog.delete_brand(brand.id)
+        except ValueError as error:  # ainda há filamentos nessa marca
+            self.message_label.setText(str(error))
+            return
+        except Exception as error:
+            self.message_label.setText(f"Não foi possível excluir: {error}")
+            return
+        self.message_label.clear()
+        self._reload_brands()
+        self.catalog_changed.emit()
 
     def delete_selected(self) -> None:
         if self._editing_id is None:
