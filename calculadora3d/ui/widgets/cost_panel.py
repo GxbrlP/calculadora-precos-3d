@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (
 from calculadora3d.core.pricing import CostBreakdown, PriceTier
 from calculadora3d.ui.formatting import brl
 
-BLOCKED_STYLE = ("background-color: #fff3b0; color: #4a3b00; padding: 8px;"
-                 " border-radius: 3px; font-weight: bold;")
+# Sem cor própria: segue o tema do sistema (claro ou escuro).
+BLOCKED_STYLE = "padding: 8px 0; font-weight: bold;"
 COST_LINES = (
     ("material", "Material"),
     ("energy", "Energia"),

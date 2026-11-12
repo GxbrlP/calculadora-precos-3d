@@ -17,7 +17,6 @@ from calculadora3d.ui.formatting import grams
 NO_FILAMENT = "— escolher —"
 PURGE_TEXT = "peso inclui a purga das trocas de cor"
 REGISTER_TEXT = "cadastrar este filamento"
-HIGHLIGHT = "#fff3b0"
 PRESELECTED = (Confidence.HIGH, Confidence.MEDIUM)
 
 COL_SLOT, COL_COLOR, COL_TYPE, COL_GRAMS, COL_FILAMENT, COL_ACTION = range(6)
@@ -168,13 +167,6 @@ class SlotTable(QWidget):
         self._buttons[slot].setVisible(missing)
         self.table.setColumnHidden(COL_ACTION, not any(
             c.currentData() is None for c in self._combos.values()))
-        row = self._rows[slot]
-        brush = QBrush(QColor(HIGHLIGHT)) if missing else QBrush()
-        for col in (COL_SLOT, COL_TYPE, COL_GRAMS, COL_FILAMENT, COL_ACTION):
-            self.table.item(row, col).setBackground(brush)
-        self._combos[slot].setStyleSheet(
-            f"QComboBox {{ background-color: {HIGHLIGHT}; color: #4a3b00; }}"
-            if missing else "")
 
     def _request_register(self, usage: FilamentUsage) -> None:
         self.register_requested.emit({
