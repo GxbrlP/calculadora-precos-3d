@@ -183,13 +183,13 @@ def _file_name(quote: ClientQuote) -> str:
 
 
 def export_quotes_pdf(parent: QWidget, catalog: Catalog,
-                      snapshots: Sequence[dict]) -> Path | None:
+                      products: Sequence[dict]) -> Path | None:
     """Pergunta descrição e preço de cada produto, onde salvar, e grava o PDF."""
-    if not snapshots:
+    if not products:
         return None
     company = catalog.get_company()
     number = catalog.next_quote_number()
-    dialog = ExportDialog(company, snapshots, number, parent)
+    dialog = ExportDialog(company, products, number, parent)
     result = dialog.exec()
     if result == GO_TO_SETTINGS:
         show_page = getattr(parent.window(), "show_page", None)

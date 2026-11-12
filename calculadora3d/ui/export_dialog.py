@@ -20,19 +20,19 @@ RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
 class ExportDialog(QDialog):
-    def __init__(self, company: CompanyInfo, snapshots: Sequence[dict], number: int,
+    def __init__(self, company: CompanyInfo, products: Sequence[dict], number: int,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Exportar orçamento")
         self.setMinimumWidth(760)
-        self._snapshots = list(snapshots)
+        self._products = list(products)
         self._descriptions: list[QLineEdit] = []
         self._combos: list[QComboBox] = []
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"Orçamento nº {number}"))
 
-        self.table = QTableWidget(len(self._snapshots), len(HEADERS))
+        self.table = QTableWidget(len(self._products), len(HEADERS))
         self.table.setHorizontalHeaderLabels(HEADERS)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -41,15 +41,15 @@ class ExportDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for col in (1, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        for row, snapshot in enumerate(self._snapshots):
-            description = QLineEdit(str(snapshot.get("project_name", "")))
+        for row, product in enumerate(self._products):
+            description = QLineEdit(str(product.get("project_name", "")))
             description.setPlaceholderText("ex.: Suporte de parede")
             description.textChanged.connect(self._update)
             combo = QComboBox()
-            for option in price_options(snapshot):
+            for option in price_options(product):
                 combo.addItem(f"{option.name} — {brl(option.unit)}/un.", option.name)
             combo.currentIndexChanged.connect(self._update)
-            quantity = QTableWidgetItem(str(snapshot["copies"]))
+            quantity = QTableWidgetItem(str(product["copies"]))
             quantity.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             total = QTableWidgetItem()
             total.setTextAlignment(RIGHT)
@@ -94,18 +94,18 @@ class ExportDialog(QDialog):
 
     def items(self) -> tuple[QuoteItem, ...]:
         """Itens do orçamento; levanta ValueError se alguma linha estiver incompleta."""
-        return tuple(quote_item(snapshot, combo.currentData(), edit.text())
-                     for snapshot, combo, edit in
-                     zip(self._snapshots, self._combos, self._descriptions))
+        return tuple(quote_item(product, combo.currentData(), edit.text())
+                     for product, combo, edit in
+                     zip(self._products, self._combos, self._descriptions))
 
     def _update(self) -> None:
         grand = Decimal(0)
         problem = None
-        for row, (snapshot, combo, edit) in enumerate(
-                zip(self._snapshots, self._combos, self._descriptions)):
+        for row, (product, combo, edit) in enumerate(
+                zip(self._products, self._combos, self._descriptions)):
             cell = self.table.item(row, 3)
             try:
-                item = quote_item(snapshot, combo.currentData(), edit.text())
+                item = quote_item(product, combo.currentData(), edit.text())
             except ValueError as exc:
                 cell.setText("—")
                 problem = problem or str(exc)
