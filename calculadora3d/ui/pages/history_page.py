@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 
 from calculadora3d.core.catalog import Catalog
 from calculadora3d.core.quotes import (
-    QuoteSummary, delete_quote, list_quotes, load_quote,
+    QuoteSummary, delete_quote, list_quotes, load_quote, order_products,
 )
 from calculadora3d.ui.formatting import brl, date_time
 from calculadora3d.ui.pdf_export import TITLE as EXPORT_TITLE, export_quotes_pdf
@@ -104,12 +104,13 @@ class HistoryPage(QWidget):
         if not ids:
             return
         try:
-            snapshots = [load_quote(self.catalog, quote_id) for quote_id in ids]
+            products = [product for quote_id in ids
+                        for product in order_products(load_quote(self.catalog, quote_id))]
         except Exception as exc:
             QMessageBox.warning(self, EXPORT_TITLE,
                                 f"Não foi possível abrir o orçamento: {exc}")
             return
-        export_quotes_pdf(self, self.catalog, snapshots)
+        export_quotes_pdf(self, self.catalog, products)
 
     def delete_selected(self) -> None:
         quote_id = self.selected_id()

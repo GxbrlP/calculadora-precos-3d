@@ -20,7 +20,8 @@ from calculadora3d.core.pricing import (
     TierConfig, compute_cost, suggest_prices,
 )
 from calculadora3d.core.quotes import (
-    build_snapshot, save_quote, snapshot_project, snapshot_result,
+    build_order, build_product, order_products, save_quote, snapshot_project,
+    snapshot_result,
 )
 from calculadora3d.core.threemf import ThreeMFError, read_project, read_projects
 from calculadora3d.ui.formatting import brl, date_time, duration, grams
@@ -339,7 +340,7 @@ class PricingPage(QWidget):
             snapshot = self._current_snapshot(self._project.name)
         if snapshot is None:
             return None
-        return export_quotes_pdf(self, self.catalog, [snapshot])
+        return export_quotes_pdf(self, self.catalog, order_products(snapshot))
 
     def _current_snapshot(self, name: str) -> dict | None:
         priced, project = self._priced, self._project
@@ -359,12 +360,12 @@ class PricingPage(QWidget):
         if self._paths:
             source = ", ".join(p.name for p in self._paths)
         else:
-            source = (self._base_snapshot or {}).get("source_file", "")
-        snapshot = build_snapshot(
+            source = (self._base_snapshot or {}).get("source_file", "")  # produto base
+        product = build_product(
             name, source, rows, priced.tasks, priced.breakdown, priced.tiers,
             priced.copies, priced.seconds, printer_id=priced.printer.id,
             extra_materials=priced.extra_materials)
-        return snapshot
+        return build_order(name, [product])
 
     def load_snapshot(self, snapshot: dict, *, recalculate: bool = False) -> None:
         """Reabre um orçamento salvo.
@@ -426,16 +427,19 @@ class PricingPage(QWidget):
         self.based_on_label.hide()
 
     def _show_saved(self, snapshot: dict) -> None:
-        breakdown, tiers = snapshot_result(snapshot)
+        product = order_products(snapshot)[0]
+        breakdown, tiers = snapshot_result(product)
         created = datetime.fromisoformat(snapshot["created_at"])
         self._saved_snapshot = snapshot
         self.saved_banner.setText(
             f"Orçamento salvo em {date_time(created)} — valores do momento em que foi salvo")
-        self.saved_details.setText(_saved_details(snapshot))
+        self.saved_details.setText(_saved_details(product))
         self.saved_box.show()
-        self.cost_panel.show_result(breakdown, tiers, int(snapshot["copies"]))
+        self.cost_panel.show_result(breakdown, tiers, int(product["copies"]))
 
     def _start_from_snapshot(self, snapshot: dict) -> None:
+        name = snapshot["name"]
+        snapshot = order_products(snapshot)[0]
         project = snapshot_project(snapshot)
         known = {f.id for f in self._filaments}
         self.slot_table.set_choices({
@@ -447,7 +451,7 @@ class PricingPage(QWidget):
         self.task_list.extras_spin.setValue(
             float(Decimal(str(snapshot.get("extra_materials", "0")))))
         self._base_snapshot = snapshot
-        self.based_on_label.setText(f"Baseado no orçamento {snapshot['project_name']}")
+        self.based_on_label.setText(f"Baseado no orçamento {name}")
         self.based_on_label.show()
         self._project = project
         self._refresh()

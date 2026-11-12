@@ -7,10 +7,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from calculadora3d.core.catalog import Catalog
+from calculadora3d.core.export import price_options
 from calculadora3d.core.models import FilamentUsage, Plate, SlicedProject
 from calculadora3d.core.pricing import CostBreakdown, FinishingTask, PriceTier
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,14 @@ class QuoteSummary:
     created_at: datetime
     total_cost: Decimal
     retail_price: Decimal
+
+
+@dataclass(frozen=True)
+class OrderTotals:
+    """Totais do pedido; uma faixa é None se algum produto não pode usá-la."""
+    quantity: int
+    cost: Decimal
+    tiers: dict[str, Decimal | None]
 
 
 def _jsonable(value):
@@ -32,17 +41,16 @@ def _jsonable(value):
     return value
 
 
-def build_snapshot(project_name: str, source_file: str,
-                   usage_rows: Sequence[dict], tasks: Sequence[FinishingTask],
-                   breakdown: CostBreakdown, tiers: Sequence[PriceTier],
-                   copies: int, seconds: int, *,
-                   printer_id: int | None = None,
-                   extra_materials: Decimal = Decimal("0")) -> dict:
+def build_product(project_name: str, source_file: str,
+                  usage_rows: Sequence[dict], tasks: Sequence[FinishingTask],
+                  breakdown: CostBreakdown, tiers: Sequence[PriceTier],
+                  copies: int, seconds: int, *,
+                  printer_id: int | None = None,
+                  extra_materials: Decimal = Decimal("0")) -> dict:
+    """Um produto (um arquivo) do pedido, com os valores do momento do cálculo."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "project_name": project_name,
         "source_file": source_file,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
         "copies": copies,
         "seconds": seconds,
         "usage": [_jsonable(row) for row in usage_rows],
@@ -63,8 +71,49 @@ def build_snapshot(project_name: str, source_file: str,
     }
 
 
+def build_order(name: str, products: Sequence[dict]) -> dict:
+    """Snapshot v2: um orçamento com N produtos."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "name": name,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "products": list(products),
+    }
+
+
+def normalize_order(snapshot: dict) -> dict:
+    """v2 volta como está; um snapshot v1 (um produto só) vira pedido de 1 produto."""
+    if "products" in snapshot:
+        return snapshot
+    product = {k: v for k, v in snapshot.items()
+               if k not in ("schema_version", "created_at")}
+    return {"schema_version": SCHEMA_VERSION, "name": snapshot["project_name"],
+            "created_at": snapshot["created_at"], "products": [product]}
+
+
+def order_products(snapshot: dict) -> list[dict]:
+    return normalize_order(snapshot)["products"]
+
+
+def order_totals(products: Sequence[dict]) -> OrderTotals:
+    """Somas do pedido; as faixas seguem a ordem das do primeiro produto."""
+    if not products:
+        return OrderTotals(0, Decimal(0), {})
+    quantity = sum(int(p["copies"]) for p in products)
+    cost = sum((Decimal(str(p["breakdown"]["total"])) for p in products), Decimal(0))
+    available = [{o.name: o.total for o in price_options(p)} for p in products]
+    tiers: dict[str, Decimal | None] = {}
+    for tier in products[0].get("tiers", []):
+        name = str(tier["name"])
+        if all(name in options for options in available):
+            tiers[name] = sum((options[name] for options in available), Decimal(0))
+        else:
+            tiers[name] = None
+    return OrderTotals(quantity, cost, tiers)
+
+
 def snapshot_result(snapshot: dict) -> tuple[CostBreakdown, tuple[PriceTier, ...]]:
-    """Custos e faixas exatamente como foram salvos, sem recalcular.
+    """Custos e faixas de um produto exatamente como foram salvos, sem recalcular.
 
     Snapshots antigos podem trazer a chave "depreciation", que não existe mais;
     ela é ignorada e o total salvo é mantido.
@@ -79,7 +128,7 @@ def snapshot_result(snapshot: dict) -> tuple[CostBreakdown, tuple[PriceTier, ...
 
 
 def snapshot_project(snapshot: dict) -> SlicedProject:
-    """Projeto de uma placa com o tempo, as gramas e as cópias do orçamento salvo."""
+    """Projeto de uma placa com o tempo, as gramas e as cópias de um produto salvo."""
     usage = tuple(
         FilamentUsage(slot=int(row["slot"]), type=row.get("type") or "",
                       color=row.get("color") or "",
@@ -93,17 +142,23 @@ def snapshot_project(snapshot: dict) -> SlicedProject:
                          plates=(plate,), usage=usage, is_sliced=True, warnings=())
 
 
-def save_quote(catalog: Catalog, snapshot: dict) -> int:
-    total_cost = snapshot["breakdown"]["total"]
-    tiers = snapshot["tiers"]
-    retail_price = tiers[0]["total"] if tiers else total_cost
+def save_quote(catalog: Catalog, order: dict) -> int:
+    order = normalize_order(order)
+    products = order["products"]
+    source_file = ", ".join(p["source_file"] for p in products if p["source_file"])
+    total_cost = Decimal(0)
+    retail_price = Decimal(0)
+    for product in products:
+        cost = Decimal(str(product["breakdown"]["total"]))
+        tiers = product["tiers"]
+        total_cost += cost
+        retail_price += Decimal(str(tiers[0]["total"])) if tiers else cost
     with catalog.connection:
         cursor = catalog.connection.execute(
             "INSERT INTO quotes (name, created_at, source_file, total_cost,"
             " retail_price, snapshot_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (snapshot["project_name"], snapshot["created_at"],
-             snapshot["source_file"], total_cost, retail_price,
-             json.dumps(snapshot, ensure_ascii=False)))
+            (order["name"], order["created_at"], source_file, str(total_cost),
+             str(retail_price), json.dumps(order, ensure_ascii=False)))
     return cursor.lastrowid
 
 
@@ -122,7 +177,7 @@ def load_quote(catalog: Catalog, quote_id: int) -> dict:
         "SELECT snapshot_json FROM quotes WHERE id = ?", (quote_id,)).fetchone()
     if row is None:
         raise KeyError(quote_id)
-    return json.loads(row["snapshot_json"])
+    return normalize_order(json.loads(row["snapshot_json"]))
 
 
 def delete_quote(catalog: Catalog, quote_id: int) -> None:

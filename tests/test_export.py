@@ -10,7 +10,7 @@ from calculadora3d.core.export import (
     missing_company_fields, price_options, quote_item,
 )
 from calculadora3d.core.pricing import CostBreakdown, FinishingTask, PriceTier
-from calculadora3d.core.quotes import build_snapshot
+from calculadora3d.core.quotes import build_product
 
 EMPRESA = CompanyInfo(name="Borcelle", address="Rua Alegre, 123 - Cidade Brasileira")
 
@@ -25,7 +25,7 @@ def _snapshot(copies=2, name="Suporte"):
         PriceTier("Mínimo", Decimal("0.2"), Decimal("12.00"), Decimal("6.00"), None),
     ]
     usage = [{"slot": 1, "color": "#FF0000", "type": "PLA", "grams": Decimal("40")}]
-    return build_snapshot(name, "peca.3mf", usage, [FinishingTask("Lixar", 30)],
+    return build_product(name, "peca.3mf", usage, [FinishingTask("Lixar", 30)],
                           breakdown, tiers, copies, 3600)
 
 

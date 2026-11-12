@@ -8,8 +8,10 @@ from calculadora3d.core.catalog import Catalog, Filament
 from calculadora3d.core.pricing import (FilamentLine, FinishingTask,
                                         PriceTier, PricingInputs, PrinterCosts,
                                         compute_cost)
-from calculadora3d.core.quotes import (build_snapshot, delete_quote,
-                                       list_quotes, load_quote, save_quote,
+from calculadora3d.core.quotes import (OrderTotals, build_order, build_product,
+                                       delete_quote, list_quotes, load_quote,
+                                       normalize_order, order_products,
+                                       order_totals, save_quote,
                                        snapshot_project, snapshot_result)
 
 
@@ -37,7 +39,7 @@ def _tiers(retail="30.00"):
 
 
 def _snap(name="Peça", breakdown=None, tiers=None, **kw):
-    return build_snapshot(
+    return build_product(
         name, "peca.3mf",
         [{"slot": 1, "color": "#FF0000", "type": "PLA", "grams": Decimal("40"),
           "filament_id": 3, "label": "Bambu PLA"}],
@@ -49,16 +51,16 @@ def test_snapshot_sobrevive_a_reajuste_de_preco(cat):
     brand = cat.add_brand("Bambu Lab")
     fid = cat.upsert_filament(Filament(None, brand, "Bambu Lab", "PLA", "PLA",
                                        Decimal("1000"), Decimal("100"), None, True))
-    qid = save_quote(cat, _snap())
+    qid = save_quote(cat, build_order("Peça", [_snap()]))
     cat.upsert_filament(Filament(fid, brand, "Bambu Lab", "PLA", "PLA",
                                  Decimal("1000"), Decimal("300"), None, True))
-    assert Decimal(load_quote(cat, qid)["breakdown"]["material"]) == Decimal("4.00")
+    assert Decimal(load_quote(cat, qid)["products"][0]["breakdown"]["material"]) == Decimal("4.00")
 
 
 def test_list_quotes_mais_recente_primeiro(cat):
-    a = save_quote(cat, _snap("A"))
-    b = save_quote(cat, _snap("B"))
-    c = save_quote(cat, _snap("C"))
+    a = save_quote(cat, build_order("A", [_snap("A")]))
+    b = save_quote(cat, build_order("B", [_snap("B")]))
+    c = save_quote(cat, build_order("C", [_snap("C")]))
     assert [q.id for q in list_quotes(cat)] == [c, b, a]
     resumo = list_quotes(cat)[0]
     assert resumo.name == "C" and isinstance(resumo.created_at, datetime)
@@ -70,20 +72,19 @@ def test_snapshot_e_json_serializavel_com_decimal():
     snap = _snap(printer_id=2, extra_materials=Decimal("3.5"))
     assert json.loads(json.dumps(snap)) == snap
     assert snap["usage"][0]["grams"] == "40"
-    assert snap["schema_version"] == 1
     assert snap["printer_id"] == 2 and snap["extra_materials"] == "3.5"
     assert snap["tasks"] == [{"name": "Lixar", "minutes": 30}]
     assert snap["tiers"][1]["min_quantity"] == 10
 
 
 def test_snapshot_converte_decimal_aninhado_nas_linhas_de_uso():
-    snap = build_snapshot("P", "", [{"x": [{"g": Decimal("1.5")}]}], [],
+    snap = build_product("P", "", [{"x": [{"g": Decimal("1.5")}]}], [],
                           _breakdown(), [], 1, 0)
     assert snap["usage"] == [{"x": [{"g": "1.5"}]}]
 
 
 def test_sem_faixas_preco_de_varejo_e_o_custo(cat):
-    qid = save_quote(cat, _snap(tiers=[]))
+    qid = save_quote(cat, build_order("Peça", [_snap(tiers=[])]))
     q, = list_quotes(cat)
     assert q.id == qid and q.retail_price == q.total_cost
 
@@ -94,7 +95,7 @@ def test_load_quote_inexistente_levanta_keyerror(cat):
 
 
 def test_delete_quote_remove_e_ignora_inexistente(cat):
-    qid = save_quote(cat, _snap())
+    qid = save_quote(cat, build_order("Peça", [_snap()]))
     delete_quote(cat, 999)
     assert len(list_quotes(cat)) == 1
     delete_quote(cat, qid)
@@ -111,7 +112,7 @@ def test_snapshot_result_reconstroi_os_valores_salvos():
 
 
 def test_snapshot_project_monta_uma_placa_com_tempo_peso_e_copias():
-    snap = build_snapshot(
+    snap = build_product(
         "Vaso", "a.3mf, b.3mf",
         [{"slot": 1, "color": "#FF0000FF", "type": "PLA", "grams": Decimal("40.5"),
           "filament_id": 3},
@@ -135,3 +136,57 @@ def test_snapshot_antigo_com_depreciacao_ainda_abre():
     breakdown, tiers = snapshot_result(snap)
     assert breakdown.total == _breakdown().total
     assert [t.name for t in tiers] == ["Varejo", "Atacado"]
+
+
+def test_pedido_ida_e_volta_com_dois_produtos():
+    a, b = _snap("Faca"), _snap("Chaveiro")
+    order = json.loads(json.dumps(build_order("Pedido", [a, b])))
+    assert order["schema_version"] == 2 and order["name"] == "Pedido"
+    datetime.fromisoformat(order["created_at"])
+    assert order_products(order) == json.loads(json.dumps([a, b]))
+
+
+def test_produto_nao_tem_chaves_de_pedido():
+    assert "schema_version" not in _snap() and "created_at" not in _snap()
+
+
+def test_snapshot_v1_vira_pedido_de_um_produto():
+    produto = _snap("Vaso")
+    v1 = {**produto, "schema_version": 1, "created_at": "2026-11-01T10:00:00"}
+    order = normalize_order(v1)
+    assert (order["schema_version"], order["name"], order["created_at"]) == (
+        2, "Vaso", "2026-11-01T10:00:00")
+    assert order["products"] == [produto]
+
+
+def test_save_quote_soma_os_produtos(cat):
+    a = _snap("A", breakdown=_breakdown("100"))
+    b = {**_snap("B", tiers=_tiers(retail="12.00")), "source_file": "b.3mf"}
+    save_quote(cat, build_order("Pedido", [a, b]))
+    q, = list_quotes(cat)
+    assert q.name == "Pedido"
+    assert q.total_cost == Decimal(a["breakdown"]["total"]) + Decimal(b["breakdown"]["total"])
+    assert q.retail_price == Decimal("42.00")
+    fonte = cat.connection.execute("SELECT source_file FROM quotes").fetchone()[0]
+    assert fonte == "peca.3mf, b.3mf"
+
+
+def test_load_quote_de_v1_gravado_devolve_v2(cat):
+    v1 = {**_snap("Vaso"), "schema_version": 1, "created_at": "2026-11-01T10:00:00"}
+    with cat.connection:
+        cur = cat.connection.execute(
+            "INSERT INTO quotes (name, created_at, source_file, total_cost, retail_price,"
+            " snapshot_json) VALUES ('Vaso', ?, '', '1', '1', ?)",
+            (v1["created_at"], json.dumps(v1)))
+    order = load_quote(cat, cur.lastrowid)
+    assert order["schema_version"] == 2 and len(order["products"]) == 1
+
+
+def test_order_totals_atacado_so_quando_todos_atingem_o_minimo():
+    doze = {**_snap("A"), "copies": 12}
+    um = {**_snap("B"), "copies": 1}
+    t = order_totals([doze, um])
+    assert t.quantity == 13
+    assert t.tiers["Varejo"] == Decimal("60.00") and t.tiers["Atacado"] is None
+    assert order_totals([doze, doze]).tiers["Atacado"] == Decimal("40.00")
+    assert order_totals([]) == OrderTotals(0, Decimal(0), {})
