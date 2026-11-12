@@ -18,7 +18,9 @@ from calculadora3d.ui.formatting import brl, date_time, duration, grams
 from calculadora3d.ui.pdf_export import export_quotes_pdf
 from calculadora3d.ui.widgets.drop_area import DropArea
 from calculadora3d.ui.widgets.order_result import OrderResult, ResultRow
-from calculadora3d.ui.widgets.product_panel import Blocked, CatalogView, ProductPanel
+from calculadora3d.ui.widgets.product_panel import (
+    Blocked, CatalogView, ProductPanel, cost_line,
+)
 
 SAVED_STYLE = ("background-color: #dbeafe; color: #1e3a5f; padding: 6px;"
                " border-radius: 3px; font-weight: bold;")
@@ -53,6 +55,7 @@ def _saved_details(product: dict) -> str:
     extras = Decimal(str(product.get("extra_materials", "0")))
     if extras:
         lines.append(f"Materiais extras: {brl(extras)}")
+    lines.append(cost_line(product["breakdown"]))
     return "\n".join(lines)
 
 
@@ -161,8 +164,6 @@ class PricingPage(QWidget):
 
     def load_projects(self, paths: list[Path]) -> None:
         """Um painel por arquivo novo; inválidos e repetidos são avisados juntos."""
-        if self._saved_order is not None:
-            self.clear()
         known = {p.path.resolve() for p in self._panels if p.path is not None}
         problems: list[str] = []
         added: list[ProductPanel] = []
@@ -174,11 +175,11 @@ class PricingPage(QWidget):
                 continue
             known.add(key)
             try:
-                project = read_project(path)
+                added.append(ProductPanel(read_project(path), self._view, path=path))
             except Exception as exc:  # arquivo de terceiro: nunca derrubar o app
                 problems.append(_read_error(path, exc))
-                continue
-            added.append(ProductPanel(project, self._view, path=path))
+        if added and self._saved_order is not None:
+            self.clear()  # sai do orçamento reaberto só se algum arquivo entrou
         for panel in added:
             self._add_panel(panel)
         if added:

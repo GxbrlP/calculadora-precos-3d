@@ -89,7 +89,7 @@ def build_pricing_inputs(filaments: Mapping[int, Filament], grams_by_slot: Mappi
     )
 
 
-def _cost_line(breakdown: dict) -> str:
+def cost_line(breakdown: dict) -> str:
     def money(key: str) -> str:
         return brl(Decimal(str(breakdown[key])))
     return (f"Custo: material {money('material')} · energia {money('energy')}"
@@ -327,7 +327,7 @@ class ProductPanel(QWidget):
             self.cost_label.setText(outcome.reason)
             self.cost_label.setStyleSheet(BLOCKED_STYLE)
         else:
-            self.cost_label.setText(_cost_line(outcome["breakdown"]))
+            self.cost_label.setText(cost_line(outcome["breakdown"]))
             self.cost_label.setStyleSheet("")
         self.changed.emit()
 
