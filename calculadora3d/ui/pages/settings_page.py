@@ -1,4 +1,4 @@
-"""Página Configurações: custos, margens, arredondamento e presets de tarefas."""
+"""Página Configurações: custos, margens, arredondamento, tarefas e dados da empresa."""
 from decimal import Decimal
 
 from PySide6.QtCore import QLocale, Signal
@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from calculadora3d.core.catalog import Catalog, Settings, TaskPreset
+from calculadora3d.core.catalog import Catalog, CompanyInfo, Settings, TaskPreset
 
 PT_BR = QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
 HUNDRED = Decimal(100)
@@ -136,9 +136,14 @@ class SettingsPage(QWidget):
         preset_layout.addWidget(self.preset_message)
         preset_layout.addLayout(preset_buttons)
 
+        self.company_box = self._build_company_box()
+        right = QVBoxLayout()
+        right.addWidget(self.preset_box, 1)
+        right.addWidget(self.company_box)
+
         layout = QHBoxLayout(self)
         layout.addWidget(general_box, 1)
-        layout.addWidget(self.preset_box, 1)
+        layout.addLayout(right, 1)
 
         self.load_form()
         self.reload_presets()
@@ -147,7 +152,53 @@ class SettingsPage(QWidget):
         super().showEvent(event)
         self.load_form()
 
+    def _build_company_box(self) -> QGroupBox:
+        self.company_edits: dict[str, QLineEdit] = {}
+        form = QFormLayout()
+        for attr, label, placeholder in (
+                ("name", "Nome da empresa *", "ex.: Borcelle"),
+                ("address", "Endereço *", "ex.: Rua Alegre, 123 - Cidade"),
+                ("phone", "Telefone", "opcional"),
+                ("site", "Site", "opcional, ex.: www.seusite.com.br"),
+                ("email", "E-mail", "opcional"),
+                ("social", "Rede social", "opcional, ex.: @seuperfil")):
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            form.addRow(label, edit)
+            self.company_edits[attr] = edit
+        hint = QLabel("Aparecem no orçamento exportado. * obrigatórios para exportar; "
+                      "os opcionais em branco não aparecem.")
+        hint.setStyleSheet("color: gray;")
+        hint.setWordWrap(True)
+        self.company_save_button = QPushButton("Salvar dados da empresa")
+        self.company_save_button.clicked.connect(self.save_company)
+        self.company_status = QLabel()
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.company_save_button)
+        buttons.addWidget(self.company_status, 1)
+        box = QGroupBox("Dados da empresa (orçamento)")
+        box_layout = QVBoxLayout(box)
+        box_layout.addLayout(form)
+        box_layout.addWidget(hint)
+        box_layout.addLayout(buttons)
+        return box
+
+    def save_company(self) -> None:
+        info = CompanyInfo(**{attr: edit.text() for attr, edit in self.company_edits.items()})
+        try:
+            self.catalog.save_company(info)
+        except Exception as error:
+            QMessageBox.warning(self, "Dados da empresa",
+                                f"Não foi possível salvar: {error}")
+            return
+        self.load_form()
+        self.company_status.setText("Dados da empresa salvos.")
+
     def load_form(self) -> None:
+        company = self.catalog.get_company()
+        for attr, edit in self.company_edits.items():
+            edit.setText(getattr(company, attr))
+        self.company_status.clear()
         s = self.catalog.get_settings()
         self.kwh_spin.setValue(float(s.kwh_price))
         self.failure_spin.setValue(_to_percent(s.failure_rate))

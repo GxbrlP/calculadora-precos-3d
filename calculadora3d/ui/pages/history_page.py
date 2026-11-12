@@ -10,7 +10,7 @@ from calculadora3d.core.quotes import (
     QuoteSummary, delete_quote, list_quotes, load_quote,
 )
 from calculadora3d.ui.formatting import brl, date_time
-from calculadora3d.ui.pdf_export import TITLE as EXPORT_TITLE, export_quote_pdf
+from calculadora3d.ui.pdf_export import TITLE as EXPORT_TITLE, export_quotes_pdf
 
 COLUMNS = ("Data", "Nome", "Custo total", "Preço de varejo")
 EMPTY_TEXT = "Nenhum orçamento salvo. Salve um cálculo na tela Precificar."
@@ -30,7 +30,7 @@ class HistoryPage(QWidget):
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         for col in range(len(COLUMNS)):
@@ -50,6 +50,8 @@ class HistoryPage(QWidget):
             "Usa este orçamento como base de um novo cálculo, com os preços atuais")
         self.duplicate_button.clicked.connect(lambda: self._emit(self.duplicate_requested))
         self.export_button = QPushButton(EXPORT_TITLE)
+        self.export_button.setToolTip(
+            "Selecione um ou mais orçamentos (Ctrl ou Shift) para virarem os produtos do PDF")
         self.export_button.clicked.connect(self.export_selected)
         self.delete_button = QPushButton("Excluir")
         self.delete_button.clicked.connect(self.delete_selected)
@@ -87,24 +89,27 @@ class HistoryPage(QWidget):
         self.empty_label.setVisible(not self._quotes)
         self._update_buttons()
 
+    def selected_ids(self) -> list[int]:
+        """Ids selecionados, na ordem da tabela."""
+        rows = sorted(r.row() for r in self.table.selectionModel().selectedRows())
+        return [self._quotes[r].id for r in rows if 0 <= r < len(self._quotes)]
+
     def selected_id(self) -> int | None:
-        rows = self.table.selectionModel().selectedRows()
-        if not rows:
-            return None
-        row = rows[0].row()
-        return self._quotes[row].id if 0 <= row < len(self._quotes) else None
+        """Id do orçamento selecionado, só quando há exatamente um."""
+        ids = self.selected_ids()
+        return ids[0] if len(ids) == 1 else None
 
     def export_selected(self) -> None:
-        quote_id = self.selected_id()
-        if quote_id is None:
+        ids = self.selected_ids()
+        if not ids:
             return
         try:
-            snapshot = load_quote(self.catalog, quote_id)
+            snapshots = [load_quote(self.catalog, quote_id) for quote_id in ids]
         except Exception as exc:
             QMessageBox.warning(self, EXPORT_TITLE,
                                 f"Não foi possível abrir o orçamento: {exc}")
             return
-        export_quote_pdf(self, snapshot)
+        export_quotes_pdf(self, self.catalog, snapshots)
 
     def delete_selected(self) -> None:
         quote_id = self.selected_id()
@@ -130,7 +135,7 @@ class HistoryPage(QWidget):
             signal.emit(quote_id)
 
     def _update_buttons(self) -> None:
-        selected = self.selected_id() is not None
-        for button in (self.reopen_button, self.duplicate_button, self.export_button,
-                       self.delete_button):
-            button.setEnabled(selected)
+        single = self.selected_id() is not None
+        for button in (self.reopen_button, self.duplicate_button, self.delete_button):
+            button.setEnabled(single)
+        self.export_button.setEnabled(bool(self.selected_ids()))

@@ -24,7 +24,7 @@ from calculadora3d.core.quotes import (
 )
 from calculadora3d.core.threemf import ThreeMFError, read_project, read_projects
 from calculadora3d.ui.formatting import brl, date_time, duration, grams
-from calculadora3d.ui.pdf_export import export_quote_pdf
+from calculadora3d.ui.pdf_export import export_quotes_pdf
 from calculadora3d.ui.widgets.cost_panel import CostPanel
 from calculadora3d.ui.widgets.drop_area import DropArea
 from calculadora3d.ui.widgets.slot_table import SlotTable, filament_label
@@ -67,7 +67,7 @@ def _saved_details(snapshot: dict) -> str:
     if snapshot.get("source_file"):
         lines.append(f"Arquivos: {snapshot['source_file']}")
     lines.append(f"Tempo de impressão: {duration(int(snapshot['seconds']))}"
-                 f" · Cópias: {snapshot['copies']}")
+                 f" · Produtos: {snapshot['copies']}")
     for row in snapshot.get("usage", []):
         text = (f"Slot {row['slot']} — {row.get('type') or '—'} {row.get('color') or ''}"
                 f" — {grams(Decimal(str(row.get('grams', '0'))))}")
@@ -235,6 +235,8 @@ class PricingPage(QWidget):
         self.copies_spin = QSpinBox()
         self.copies_spin.setMinimum(1)
         self.copies_spin.setMaximum(100000)
+        self.copies_spin.setToolTip(
+            "Quantos produtos vendáveis saem desta impressão; o custo é dividido entre eles")
         self.copies_spin.valueChanged.connect(lambda _v: self.inputs_changed.emit())
 
         self._unsliced_label = QLabel(UNSLICED_TEXT)
@@ -250,7 +252,7 @@ class PricingPage(QWidget):
         form.addRow("Placas", self._plates_label)
         form.addRow("Tempo total", self._time_label)
         form.addRow("Peso total", self._weight_label)
-        form.addRow("Cópias", self.copies_spin)
+        form.addRow("Produtos", self.copies_spin)
         layout = QVBoxLayout(self.summary_box)
         layout.addLayout(form)
         layout.addWidget(self._unsliced_label)
@@ -337,7 +339,7 @@ class PricingPage(QWidget):
             snapshot = self._current_snapshot(self._project.name)
         if snapshot is None:
             return None
-        return export_quote_pdf(self, snapshot)
+        return export_quotes_pdf(self, self.catalog, [snapshot])
 
     def _current_snapshot(self, name: str) -> dict | None:
         priced, project = self._priced, self._project

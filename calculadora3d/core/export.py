@@ -1,71 +1,78 @@
-"""Orçamento para o cliente: peças, quantidade, acabamento, prazo e preço.
+"""Orçamento para o cliente: empresa, produtos e um preço por produto.
 
-Nunca expõe a decomposição de custo nem a faixa de preço mínimo.
+Só carrega o que vai impresso: descrição, preço unitário da faixa escolhida,
+quantidade e totais. Custos, margens e nomes de faixa nunca entram.
 """
-from datetime import datetime
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
-from html import escape
 
-from calculadora3d.core.formatting import brl, date_time, duration
+from calculadora3d.core.catalog import CompanyInfo
+from calculadora3d.core.formatting import date_br
 
-HIDDEN_TIER = "mínimo"
-
-
-def _lead_seconds(snapshot: dict) -> int:
-    minutes = sum(int(t.get("minutes", 0)) for t in snapshot.get("tasks", []))
-    return int(snapshot["seconds"]) + minutes * 60
+_REQUIRED_COMPANY = (("name", "nome da empresa"), ("address", "endereço"))
 
 
-def _prices(snapshot: dict) -> list[tuple[str, str]]:
-    """Linhas (rótulo, valor) de preço: varejo primeiro, depois atacado."""
-    tiers = snapshot.get("tiers", [])
-    rows: list[tuple[str, str]] = []
-    for index, tier in enumerate(tiers):
-        name = str(tier["name"])
-        if index > 0 and name.casefold() == HIDDEN_TIER:
+@dataclass(frozen=True)
+class PriceOption:
+    """Uma faixa de preço que pode ser apresentada ao cliente."""
+    name: str
+    unit: Decimal
+    total: Decimal
+
+
+@dataclass(frozen=True)
+class QuoteItem:
+    description: str
+    unit: Decimal
+    quantity: int
+    total: Decimal
+
+
+@dataclass(frozen=True)
+class ClientQuote:
+    company: CompanyInfo
+    number: int
+    date: str
+    items: tuple[QuoteItem, ...]
+    total: Decimal
+
+
+def price_options(snapshot: dict) -> tuple[PriceOption, ...]:
+    """Faixas do orçamento salvo; uma faixa com quantidade mínima só entra se atingida."""
+    quantity = int(snapshot["copies"])
+    options = []
+    for tier in snapshot.get("tiers", []):
+        minimum = tier.get("min_quantity")
+        if minimum is not None and quantity < int(minimum):
             continue
-        unit = brl(Decimal(str(tier["unit"])))
-        if index == 0:
-            rows.append((f"{name} (unitário)", unit))
-            rows.append((f"{name} (total)", brl(Decimal(str(tier["total"])))))
-        else:
-            minimum = tier.get("min_quantity")
-            suffix = f" (a partir de {minimum} un.)" if minimum else ""
-            rows.append((f"{name}{suffix}", unit))
-    return rows
+        options.append(PriceOption(str(tier["name"]), Decimal(str(tier["unit"])),
+                                   Decimal(str(tier["total"]))))
+    return tuple(options)
 
 
-def _fields(snapshot: dict) -> list[tuple[str, str]]:
-    created = datetime.fromisoformat(snapshot["created_at"])
-    finishing = ", ".join(t["name"] for t in snapshot.get("tasks", [])) or "—"
-    return [
-        ("Projeto", str(snapshot["project_name"])),
-        ("Data", date_time(created)),
-        ("Quantidade", str(snapshot["copies"])),
-        ("Acabamento", finishing),
-        ("Prazo de produção estimado", duration(_lead_seconds(snapshot))),
-    ]
+def quote_item(snapshot: dict, tier_name: str, description: str) -> QuoteItem:
+    description = description.strip()
+    if not description:
+        raise ValueError("Informe a descrição do produto.")
+    option = next((o for o in price_options(snapshot) if o.name == tier_name), None)
+    if option is None:
+        raise ValueError(f"A faixa {tier_name} não está disponível para este produto.")
+    return QuoteItem(description, option.unit, int(snapshot["copies"]), option.total)
 
 
-def quote_to_text(snapshot: dict) -> str:
-    lines = ["ORÇAMENTO", ""]
-    lines += [f"{label}: {value}" for label, value in _fields(snapshot)]
-    lines += ["", "Preços"]
-    lines += [f"{label}: {value}" for label, value in _prices(snapshot)]
-    return "\n".join(lines) + "\n"
+def missing_company_fields(company: CompanyInfo) -> list[str]:
+    return [label for attr, label in _REQUIRED_COMPANY
+            if not getattr(company, attr).strip()]
 
 
-def quote_to_html(snapshot: dict) -> str:
-    def rows(items):
-        return "".join(
-            f"<tr><td>{escape(label)}</td><td align='right'><b>{escape(value)}</b></td></tr>"
-            for label, value in items)
-
-    return (
-        "<html><head><meta charset='utf-8'></head>"
-        "<body style='font-family: sans-serif; font-size: 11pt;'>"
-        "<h1>Orçamento</h1>"
-        f"<table cellspacing='0' cellpadding='6'>{rows(_fields(snapshot))}</table>"
-        "<h2>Preços</h2>"
-        f"<table cellspacing='0' cellpadding='6'>{rows(_prices(snapshot))}</table>"
-        "</body></html>")
+def build_client_quote(company: CompanyInfo, number: int, when: date,
+                       items: Sequence[QuoteItem]) -> ClientQuote:
+    missing = missing_company_fields(company)
+    if missing:
+        raise ValueError("Configure em Configurações: " + ", ".join(missing) + ".")
+    if not items:
+        raise ValueError("O orçamento precisa de pelo menos um produto.")
+    total = sum((item.total for item in items), Decimal(0))
+    return ClientQuote(company, number, date_br(when), tuple(items), total)

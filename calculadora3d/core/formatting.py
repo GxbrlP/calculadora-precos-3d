@@ -1,5 +1,5 @@
 """Formatação pt-BR de exibição (sem locale, sem Qt)."""
-from datetime import datetime
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 
@@ -30,3 +30,7 @@ def duration(seconds: int) -> str:
 
 def date_time(value: datetime) -> str:
     return value.strftime("%d/%m/%Y %H:%M")
+
+
+def date_br(value: date) -> str:
+    return value.strftime("%d/%m/%Y")

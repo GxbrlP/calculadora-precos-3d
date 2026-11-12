@@ -69,3 +69,9 @@ def test_parse_decimal_grupo_zero_a_esquerda_e_decimal():
 
 def test_date_time_dia_mes_ano_hora_minuto():
     assert date_time(datetime(2026, 3, 7, 9, 5, 42)) == "07/03/2026 09:05"
+
+
+def test_data_sem_horario():
+    from datetime import date
+    from calculadora3d.core.formatting import date_br
+    assert date_br(date(2026, 11, 2)) == "02/11/2026"

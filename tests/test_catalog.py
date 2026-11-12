@@ -246,3 +246,31 @@ def test_migrate_remove_custos_antigos_da_impressora(tmp_path):
     cat.upsert_printer(Printer(None, "P1S", "Bambu Lab P1S", Decimal("150")))
     assert len(cat.list_printers()) == 2
     cat.close()
+
+
+def test_dados_da_empresa_ida_e_volta(cat):
+    from calculadora3d.core.catalog import CompanyInfo
+    assert cat.get_company() == CompanyInfo()
+    info = CompanyInfo(name="Borcelle", address="Rua Alegre, 123", phone="(12) 3456-7890",
+                       site="www.grandesite.com.br", email="ola@grandesite.com.br",
+                       social="@grandesite")
+    cat.save_company(info)
+    assert cat.get_company() == info
+    cat.save_company(CompanyInfo(name="  Borcelle  ", address="Rua"))
+    assert cat.get_company() == CompanyInfo(name="Borcelle", address="Rua")
+
+
+def test_dados_da_empresa_nao_atrapalham_as_configuracoes(cat):
+    from calculadora3d.core.catalog import CompanyInfo
+    cat.save_company(CompanyInfo(name="Borcelle", address="Rua"))
+    assert cat.get_settings() == Settings()
+
+
+def test_numero_do_orcamento_so_avanca_quando_confirmado(cat):
+    assert cat.next_quote_number() == 1
+    assert cat.next_quote_number() == 1
+    cat.confirm_quote_number(1)
+    assert cat.next_quote_number() == 2
+    cat.confirm_quote_number(2)
+    cat.confirm_quote_number(1)  # confirmação atrasada não volta o contador
+    assert cat.next_quote_number() == 3

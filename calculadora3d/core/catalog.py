@@ -111,6 +111,20 @@ class Settings:
     rounding_step: Decimal = Decimal("0.50")
 
 
+@dataclass(frozen=True)
+class CompanyInfo:
+    """Dados da empresa impressos no orçamento do cliente; só nome e endereço são obrigatórios."""
+    name: str = ""
+    address: str = ""
+    phone: str = ""
+    site: str = ""
+    email: str = ""
+    social: str = ""
+
+
+_COMPANY_PREFIX = "company_"
+_LAST_QUOTE_NUMBER = "last_quote_number"
+
 _MARGIN_FIELDS = ("retail_margin", "wholesale_margin", "minimum_margin")
 _NON_NEGATIVE_FIELDS = ("kwh_price", "labor_hourly", "packaging",
                         "rounding_step", "wholesale_min_quantity")
@@ -261,6 +275,36 @@ class Catalog:
                 "INSERT INTO settings (key, value) VALUES (?, ?)"
                 " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [(f.name, str(getattr(settings, f.name))) for f in fields(Settings)])
+
+    # Dados da empresa e numeração do orçamento (mesma tabela settings, chaves próprias)
+    def _setting(self, key: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row["value"]
+
+    def _put_settings(self, items: list[tuple[str, str]]) -> None:
+        with self.connection:
+            self.connection.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value", items)
+
+    def get_company(self) -> CompanyInfo:
+        return CompanyInfo(**{
+            f.name: self._setting(_COMPANY_PREFIX + f.name) or ""
+            for f in fields(CompanyInfo)})
+
+    def save_company(self, info: CompanyInfo) -> None:
+        self._put_settings([(_COMPANY_PREFIX + f.name, getattr(info, f.name).strip())
+                            for f in fields(CompanyInfo)])
+
+    def next_quote_number(self) -> int:
+        """Número que o próximo orçamento exportado vai receber (não reserva)."""
+        return int(self._setting(_LAST_QUOTE_NUMBER) or 0) + 1
+
+    def confirm_quote_number(self, number: int) -> None:
+        """Registra que o orçamento `number` foi exportado; o contador nunca volta."""
+        last = int(self._setting(_LAST_QUOTE_NUMBER) or 0)
+        self._put_settings([(_LAST_QUOTE_NUMBER, str(max(last, number)))])
 
     # Presets de tarefa
     def list_task_presets(self) -> list[TaskPreset]:
