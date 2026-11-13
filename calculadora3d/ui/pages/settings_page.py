@@ -1,7 +1,7 @@
 """Página Configurações: custos, margens, arredondamento, tarefas e dados da empresa."""
 from decimal import Decimal
 
-from PySide6.QtCore import QLocale, Signal
+from PySide6.QtCore import QLocale, QTimer, Signal
 from PySide6.QtWidgets import (
     QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
@@ -12,6 +12,7 @@ from calculadora3d.core.catalog import Catalog, CompanyInfo, Settings, TaskPrese
 
 PT_BR = QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
 HUNDRED = Decimal(100)
+STATUS_TIMEOUT_MS = 4000
 
 
 def _money_spin(maximum: float = 1_000_000) -> QDoubleSpinBox:
@@ -42,6 +43,19 @@ def _fraction(spin: QDoubleSpinBox) -> Decimal:
 
 def _to_percent(fraction: Decimal) -> float:
     return float(fraction * HUNDRED)
+
+
+def _flash(label: QLabel, timer: QTimer, text: str) -> None:
+    """Mostra `text` no rótulo e o apaga após STATUS_TIMEOUT_MS."""
+    label.setText(text)
+    timer.start(STATUS_TIMEOUT_MS)
+
+
+def _status_timer(label: QLabel, parent: QWidget) -> QTimer:
+    timer = QTimer(parent)
+    timer.setSingleShot(True)
+    timer.timeout.connect(label.clear)
+    return timer
 
 
 class SettingsPage(QWidget):
@@ -86,6 +100,7 @@ class SettingsPage(QWidget):
         self.save_button = QPushButton("Salvar")
         self.save_button.clicked.connect(self.save)
         self.status_label = QLabel()
+        self._status_timer = _status_timer(self.status_label, self)
         buttons = QHBoxLayout()
         buttons.addWidget(self.save_button)
         buttons.addWidget(self.status_label, 1)
@@ -173,6 +188,7 @@ class SettingsPage(QWidget):
         self.company_save_button = QPushButton("Salvar dados da empresa")
         self.company_save_button.clicked.connect(self.save_company)
         self.company_status = QLabel()
+        self._company_status_timer = _status_timer(self.company_status, self)
         buttons = QHBoxLayout()
         buttons.addWidget(self.company_save_button)
         buttons.addWidget(self.company_status, 1)
@@ -192,13 +208,14 @@ class SettingsPage(QWidget):
                                 f"Não foi possível salvar: {error}")
             return
         self.load_form()
-        self.company_status.setText("Dados da empresa salvos.")
+        _flash(self.company_status, self._company_status_timer, "Dados da empresa salvos.")
 
     def load_form(self) -> None:
         company = self.catalog.get_company()
         for attr, edit in self.company_edits.items():
             edit.setText(getattr(company, attr))
         self.company_status.clear()
+        self.status_label.clear()
         s = self.catalog.get_settings()
         self.kwh_spin.setValue(float(s.kwh_price))
         self.failure_spin.setValue(_to_percent(s.failure_rate))
@@ -229,7 +246,7 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Configurações inválidas", str(error))
             return
         self.load_form()
-        self.status_label.setText("Configurações salvas.")
+        _flash(self.status_label, self._status_timer, "Configurações salvas.")
         self.settings_changed.emit()
 
     # Presets de tarefa
