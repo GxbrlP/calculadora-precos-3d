@@ -24,7 +24,7 @@ class ExportDialog(QDialog):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Exportar orçamento")
-        self.setMinimumWidth(760)
+        self.setMinimumWidth(880)
         self._products = list(products)
         self._descriptions: list[QLineEdit] = []
         self._combos: list[QComboBox] = []

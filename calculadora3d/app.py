@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication
 from calculadora3d.core import paths
 from calculadora3d.core.catalog import Catalog
 from calculadora3d.ui.main_window import MainWindow
+from calculadora3d.ui.theme import apply_theme
 
 
 def resource_path(name: str) -> Path:
@@ -19,6 +20,7 @@ def resource_path(name: str) -> Path:
 
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
+    apply_theme(app)
     app.setWindowIcon(QIcon(str(resource_path("icon.png"))))
     catalog = Catalog(paths.db_path())
     try:

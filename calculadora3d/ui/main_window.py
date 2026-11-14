@@ -1,4 +1,5 @@
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QStackedWidget, QVBoxLayout, QWidget, QMainWindow,
@@ -20,7 +21,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.catalog = catalog
         self.setWindowTitle("Calculadora 3D")
-        self.resize(1100, 720)
+        self._resize_to_screen(1280, 820)
 
         self._stack = QStackedWidget()
         self._buttons: dict[str, QPushButton] = {}
@@ -33,7 +34,7 @@ class MainWindow(QMainWindow):
         self._sidebar = sidebar
 
         side_widget = QWidget()
-        side_widget.setFixedWidth(180)
+        side_widget.setFixedWidth(210)
         side_widget.setLayout(sidebar)
 
         central = QWidget()
@@ -67,6 +68,15 @@ class MainWindow(QMainWindow):
         self.history_page.duplicate_requested.connect(
             lambda quote_id: self._open_quote(quote_id, recalculate=True))
         self.show_page(PAGE_NAMES[0])
+
+    def _resize_to_screen(self, width: int, height: int) -> None:
+        """Tamanho inicial, sem passar da área livre da tela."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            free = screen.availableGeometry()
+            width = min(width, free.width() - 40)
+            height = min(height, free.height() - 40)
+        self.resize(width, height)
 
     def _register_filament(self, data: dict) -> None:
         self.show_page("Filamentos")
