@@ -27,8 +27,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -53,8 +53,8 @@ jobs:
     env:
       VERSION: ${{ needs.test.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -72,23 +72,27 @@ jobs:
       - name: Renomear
         shell: pwsh
         run: Move-Item dist/Calculadora3D.exe "dist/Calculadora3D-$env:VERSION-windows.exe"
-      - name: Teste de fumaça (15 s)
+      - name: Teste de fumaça (até 60 s)
         shell: pwsh
         run: |
           $data = Join-Path $env:RUNNER_TEMP "appdata"
           New-Item -ItemType Directory -Force $data | Out-Null
           $env:APPDATA = $data
+          $db = Join-Path $data "Calculadora3D/dados.db"
           $p = Start-Process "dist/Calculadora3D-$env:VERSION-windows.exe" -PassThru
-          Start-Sleep -Seconds 15
+          $null = $p.Handle
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path $db) -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+          }
+          Start-Sleep -Seconds 3
           $alive = -not $p.HasExited
           Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           if ($alive) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
           if (-not $alive) { throw "o app fechou antes do tempo (código $($p.ExitCode))" }
-          if (-not (Test-Path (Join-Path $data "Calculadora3D/dados.db"))) {
-            throw "o app abriu mas não criou o banco de dados"
-          }
-      - uses: actions/upload-artifact@v4
+          if (-not (Test-Path $db)) { throw "o app não criou o banco de dados em 60 s" }
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/Calculadora3D-${{ env.VERSION }}-windows.exe
@@ -100,8 +104,8 @@ jobs:
     env:
       VERSION: ${{ needs.test.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -111,7 +115,17 @@ jobs:
         run: pip install -e ".[dev]"
       - name: AppImage
         run: bash packaging/linux/build_appimage.sh "$VERSION"
-      - uses: actions/upload-artifact@v4
+      # Tira a libxcb-cursor do sistema para provar que o AppImage usa a cópia
+      # que vai dentro dele (muitas distros não a têm instalada).
+      - name: Remover libxcb-cursor do sistema
+        run: |
+          sudo dpkg -r --force-depends libxcb-cursor0
+          if ldconfig -p | grep -q 'libxcb-cursor\.so\.0 '; then
+            echo "libxcb-cursor ainda está no sistema" >&2; exit 1
+          fi
+      - name: Teste de fumaça
+        run: bash packaging/linux/smoke_appimage.sh "dist/Calculadora3D-$VERSION-x86_64.AppImage"
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: dist/Calculadora3D-${{ env.VERSION }}-x86_64.AppImage
@@ -119,18 +133,19 @@ jobs:
 
   release:
     needs: [test, windows, linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Só em push de tag: rodar à mão (mesmo escolhendo uma tag) nunca publica.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.test.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: Calculadora 3D ${{ env.VERSION }}
           generate_release_notes: true

@@ -78,8 +78,10 @@ abaixo). Para gerar localmente, com o ambiente acima instalado
 - **Windows:** `pyinstaller calculadora3d.spec` → arquivo único, sem console,
   em `dist\Calculadora3D.exe`.
 - **Linux:** `bash packaging/linux/build_appimage.sh 0.2.0` →
-  `dist/Calculadora3D-0.2.0-x86_64.AppImage` (usa `calculadora3d-linux.spec`;
-  precisa de `xvfb` para o teste de abertura no final).
+  `dist/Calculadora3D-0.2.0-x86_64.AppImage` (usa `calculadora3d-linux.spec` e
+  baixa o `appimagetool`, então precisa de internet). Para conferir se abre:
+  `bash packaging/linux/smoke_appimage.sh dist/Calculadora3D-0.2.0-x86_64.AppImage`
+  (precisa de `xvfb`).
 
 O ícone é gerado por `python tools/make_icon.py` (grava
 `calculadora3d/resources/icon.png` e `icon.ico`).

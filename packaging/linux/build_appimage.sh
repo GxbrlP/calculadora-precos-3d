@@ -2,6 +2,7 @@
 # Gera dist/Calculadora3D-<versão>-x86_64.AppImage. Roda no Linux, na raiz do
 # repositório, com o ambiente do projeto instalado (pip install -e ".[dev]").
 # Uso: bash packaging/linux/build_appimage.sh 0.2.0
+# Depois: bash packaging/linux/smoke_appimage.sh dist/Calculadora3D-0.2.0-x86_64.AppImage
 set -euo pipefail
 
 VERSION="${1:?uso: build_appimage.sh <versão>}"
@@ -29,14 +30,21 @@ install -m 644 calculadora3d/resources/icon.png "$APPDIR/calculadora3d.png"
 
 echo "== Conferindo o conteúdo"
 # Sem libxcb-cursor o Qt não abre janela em várias distros (Ubuntu, Mint).
-if [ -z "$(find "$BUNDLE" -name 'libxcb-cursor.so.0*' -print -quit)" ]; then
-    SYSLIB="$(ldconfig -p | awk '/libxcb-cursor\.so\.0 / {print $NF; exit}')"
-    [ -n "$SYSLIB" ] || fail "libxcb-cursor.so.0 não está no sistema de build (apt install libxcb-cursor0)"
-    echo "PyInstaller não incluiu libxcb-cursor; copiando $SYSLIB"
-    cp -L "$SYSLIB" "$BUNDLE/_internal/libxcb-cursor.so.0"
+# Ela vai junto, na mesma pasta do plugin do Qt que a usa (libQt6XcbQpa),
+# que está no RUNPATH ($ORIGIN) dele — assim é achada sem LD_LIBRARY_PATH.
+XCBQPA="$(find "$BUNDLE" -name 'libQt6XcbQpa.so*' -print -quit)"
+[ -n "$XCBQPA" ] || fail "libQt6XcbQpa não foi empacotada (plugin xcb do Qt)"
+QTLIB="$(dirname "$XCBQPA")"
+CURSOR="$(find "$BUNDLE" -name 'libxcb-cursor.so.0*' -print -quit)"
+if [ -z "$CURSOR" ]; then
+    CURSOR="$(ldconfig -p | awk '/libxcb-cursor\.so\.0 / && !f {print $NF; f=1}')"
+    [ -n "$CURSOR" ] || fail "libxcb-cursor.so.0 não está no sistema de build (apt install libxcb-cursor0)"
 fi
-[ -n "$(find "$BUNDLE" -path '*calculadora3d/resources/icon.png' -print -quit)" ] \
-    || fail "recursos do app (icon.png) não foram empacotados"
+if [ ! -e "$QTLIB/libxcb-cursor.so.0" ]; then
+    echo "Copiando $CURSOR para $QTLIB"
+    cp -L "$CURSOR" "$QTLIB/libxcb-cursor.so.0"
+fi
+[ -n "$(find "$BUNDLE" -path '*calculadora3d/resources/icon.png' -print -quit)" ]     || fail "recursos do app (icon.png) não foram empacotados"
 
 echo "== appimagetool"
 if [ ! -x "$TOOL" ]; then
@@ -46,15 +54,5 @@ fi
 rm -f "$OUT"
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$TOOL" "$APPDIR" "$OUT"
 chmod +x "$OUT"
-
-echo "== Teste de fumaça (15 s)"
-DATA="$(mktemp -d)"
-set +e
-XDG_DATA_HOME="$DATA" APPIMAGE_EXTRACT_AND_RUN=1 \
-    xvfb-run -a timeout 15 "./$OUT"
-CODE=$?
-set -e
-[ "$CODE" -eq 124 ] || fail "o app fechou antes do tempo (código $CODE)"
-[ -f "$DATA/calculadora3d/dados.db" ] || fail "o app abriu mas não criou o banco de dados"
 
 echo "OK: $OUT"
