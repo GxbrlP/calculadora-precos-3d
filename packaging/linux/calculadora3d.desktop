@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Calculadora 3D
+Comment=Custo e preço de impressões 3D
+Exec=Calculadora3D
+Icon=calculadora3d
+Categories=Office;
+Terminal=false
