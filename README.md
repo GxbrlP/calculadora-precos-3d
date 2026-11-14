@@ -5,6 +5,30 @@ e calcula o custo e o preço de venda de uma impressão 3D: filamento, energia,
 taxa de falha, mão de obra, embalagem e margens (varejo, atacado e revenda).
 Os valores ficam em um banco SQLite local; nada é enviado para a internet.
 
+## Baixar
+
+Baixe a versão mais recente em
+**[Releases](https://github.com/GxbrlP/calculadora-precos-3d/releases/latest)**.
+Não precisa instalar Python nem nada além do arquivo.
+
+**Windows** — baixe `Calculadora3D-X.Y.Z-windows.exe` e abra. Na primeira vez
+o Windows pode mostrar **"O Windows protegeu o computador"** (SmartScreen):
+clique em **Mais informações** e depois em **Executar assim mesmo**. O aviso
+aparece porque o programa não tem assinatura digital paga, não por haver algo
+errado com ele.
+
+**Linux** — baixe `Calculadora3D-X.Y.Z-x86_64.AppImage`, dê permissão de
+execução e abra:
+
+```
+chmod +x Calculadora3D-*-x86_64.AppImage
+./Calculadora3D-*-x86_64.AppImage
+```
+
+(ou, no gerenciador de arquivos: Propriedades → Permissões → "Permitir executar
+como programa"). Funciona em distribuições de 2022 em diante (Ubuntu 22.04+,
+Fedora 36+, Mint 21+).
+
 ## Arquivo de entrada
 
 O app espera o `.gcode.3mf` exportado do Bambu Studio com **Ctrl+G** (Exportar
@@ -45,18 +69,37 @@ pytest
 
 Para fazer backup ou migrar de máquina, copie esse arquivo.
 
-## Gerar o .exe (Windows)
+## Gerar os executáveis à mão
 
-O build do executável roda no Windows, com o ambiente acima instalado
+Normalmente não é preciso: as releases são geradas pelo GitHub Actions (veja
+abaixo). Para gerar localmente, com o ambiente acima instalado
 (`pip install -e ".[dev]"` já inclui o PyInstaller):
 
-```
-pyinstaller calculadora3d.spec
-```
+- **Windows:** `pyinstaller calculadora3d.spec` → arquivo único, sem console,
+  em `dist\Calculadora3D.exe`.
+- **Linux:** `bash packaging/linux/build_appimage.sh 0.2.0` →
+  `dist/Calculadora3D-0.2.0-x86_64.AppImage` (usa `calculadora3d-linux.spec`;
+  precisa de `xvfb` para o teste de abertura no final).
 
-O resultado é um arquivo único, sem console, em `dist\Calculadora3D.exe`.
 O ícone é gerado por `python tools/make_icon.py` (grava
 `calculadora3d/resources/icon.png` e `icon.ico`).
+
+## Lançar uma versão
+
+1. Suba a versão em `calculadora3d/__init__.py` (`__version__ = "0.3.0"`) e
+   faça o commit.
+2. Crie e envie a tag com o mesmo número:
+
+   ```
+   git tag v0.3.0
+   git push origin main v0.3.0
+   ```
+
+O workflow `Release` (`.github/workflows/release.yml`) roda os testes, gera o
+`.exe` e o AppImage, abre cada um por alguns segundos para conferir e publica a
+release com os dois arquivos. Se a tag não bater com `__version__` ou qualquer
+etapa falhar, nada é publicado. Para testar o processo sem publicar, use
+**Actions → Release → Run workflow**: os arquivos ficam como artefatos do run.
 
 ## Fora do escopo da v1
 
