@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QVBoxLayout, QWidget, QMainWindow,
 )
 
+from calculadora3d import __version__
 from calculadora3d.core.catalog import Catalog
 from calculadora3d.core.quotes import load_quote
 from calculadora3d.ui.pages.filaments_page import FilamentsPage
@@ -20,7 +21,7 @@ class MainWindow(QMainWindow):
     def __init__(self, catalog: Catalog):
         super().__init__()
         self.catalog = catalog
-        self.setWindowTitle("Calculadora 3D")
+        self.setWindowTitle(f"Calculadora 3D {__version__}")
         self._resize_to_screen(1280, 820)
 
         self._stack = QStackedWidget()
