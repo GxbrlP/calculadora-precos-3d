@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import datetime
 from decimal import Decimal
@@ -5,14 +6,17 @@ from decimal import Decimal
 import pytest
 
 from calculadora3d.core.catalog import Catalog, Filament
+from calculadora3d.core.models import PlateThumbnail
 from calculadora3d.core.pricing import (FilamentLine, FinishingTask,
                                         PriceTier, PricingInputs, PrinterCosts,
                                         compute_cost)
+from calculadora3d.core.threemf import PNG_SIGNATURE
 from calculadora3d.core.quotes import (OrderTotals, build_order, build_product,
                                        delete_quote, list_quotes, load_quote,
                                        normalize_order, order_products,
                                        order_totals, save_quote,
-                                       snapshot_project, snapshot_result)
+                                       snapshot_project, snapshot_result,
+                                       snapshot_thumbnails)
 
 
 @pytest.fixture
@@ -190,3 +194,41 @@ def test_order_totals_atacado_so_quando_todos_atingem_o_minimo():
     assert t.tiers["Varejo"] == Decimal("60.00") and t.tiers["Atacado"] is None
     assert order_totals([doze, doze]).tiers["Atacado"] == Decimal("40.00")
     assert order_totals([]) == OrderTotals(0, Decimal(0), {})
+
+
+THUMBS = (PlateThumbnail(1, PNG_SIGNATURE + b"a"),
+          PlateThumbnail(2, PNG_SIGNATURE + b"b", unsliced=True))
+
+
+def test_miniaturas_vao_e_voltam_pelo_historico(cat):
+    quote_id = save_quote(cat, build_order("P", [_snap(thumbnails=THUMBS)]))
+    product, = order_products(load_quote(cat, quote_id))
+    assert snapshot_thumbnails(product) == THUMBS
+    assert snapshot_project(product).thumbnails == THUMBS
+
+
+def test_orcamento_antigo_sem_miniaturas_reabre_sem_imagem():
+    product = _snap()
+    product.pop("thumbnails", None)
+    assert snapshot_thumbnails(product) == ()
+    assert snapshot_project(product).thumbnails == ()
+
+
+def test_miniatura_malformada_no_snapshot_e_descartada():
+    product = _snap(thumbnails=THUMBS)
+    product["thumbnails"] += ["lixo", {"plate": "x", "png": "AAAA"},
+                              {"plate": 3, "png": "%%%"},
+                              {"plate": 4, "png": base64.b64encode(b"nao png").decode()},
+                              {"plate": 5}]
+    assert snapshot_thumbnails(product) == THUMBS
+
+
+def test_campo_de_miniaturas_que_nao_e_lista_e_ignorado():
+    product = _snap()
+    product["thumbnails"] = "lixo"
+    assert snapshot_thumbnails(product) == ()
+
+
+def test_usar_como_base_e_salvar_de_novo_mantem_as_miniaturas():
+    again = _snap(thumbnails=snapshot_project(_snap(thumbnails=THUMBS)).thumbnails)
+    assert snapshot_thumbnails(again) == THUMBS

@@ -1,4 +1,6 @@
 """Histórico de orçamentos: snapshots JSON imunes a reajustes do catálogo."""
+import base64
+import binascii
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
@@ -8,8 +10,9 @@ from pathlib import Path
 
 from calculadora3d.core.catalog import Catalog
 from calculadora3d.core.export import price_options
-from calculadora3d.core.models import FilamentUsage, Plate, SlicedProject
+from calculadora3d.core.models import FilamentUsage, Plate, PlateThumbnail, SlicedProject
 from calculadora3d.core.pricing import CostBreakdown, FinishingTask, PriceTier
+from calculadora3d.core.threemf import PNG_SIGNATURE
 
 SCHEMA_VERSION = 2
 
@@ -46,7 +49,8 @@ def build_product(project_name: str, source_file: str,
                   breakdown: CostBreakdown, tiers: Sequence[PriceTier],
                   copies: int, seconds: int, *,
                   printer_id: int | None = None,
-                  extra_materials: Decimal = Decimal("0")) -> dict:
+                  extra_materials: Decimal = Decimal("0"),
+                  thumbnails: Sequence[PlateThumbnail] = ()) -> dict:
     """Um produto (um arquivo) do pedido, com os valores do momento do cálculo."""
     return {
         "project_name": project_name,
@@ -68,7 +72,34 @@ def build_product(project_name: str, source_file: str,
                    "min_quantity": t.min_quantity} for t in tiers],
         "printer_id": printer_id,
         "extra_materials": str(extra_materials),
+        "thumbnails": [{"plate": t.plate, "unsliced": t.unsliced,
+                        "png": base64.b64encode(t.png).decode("ascii")}
+                       for t in thumbnails],
     }
+
+
+def _thumbnail(entry) -> PlateThumbnail | None:
+    if not isinstance(entry, dict):
+        return None
+    plate, encoded = entry.get("plate"), entry.get("png")
+    if not isinstance(plate, int) or isinstance(plate, bool) or not isinstance(encoded, str):
+        return None
+    try:
+        png = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not png.startswith(PNG_SIGNATURE):
+        return None
+    return PlateThumbnail(plate, png, bool(entry.get("unsliced", False)))
+
+
+def snapshot_thumbnails(snapshot: dict) -> tuple[PlateThumbnail, ...]:
+    """Miniaturas salvas no produto; orçamento antigo ou entrada estragada fica sem imagem."""
+    entries = snapshot.get("thumbnails")
+    if not isinstance(entries, list):
+        return ()
+    found = (_thumbnail(entry) for entry in entries)
+    return tuple(t for t in found if t is not None)
 
 
 def build_order(name: str, products: Sequence[dict]) -> dict:
@@ -139,7 +170,8 @@ def snapshot_project(snapshot: dict) -> SlicedProject:
     plate = Plate(1, int(snapshot["seconds"]), total, int(snapshot["copies"]), False)
     name = snapshot["project_name"]
     return SlicedProject(name=name, source_path=Path(name), printer_model=None,
-                         plates=(plate,), usage=usage, is_sliced=True, warnings=())
+                         plates=(plate,), usage=usage, is_sliced=True, warnings=(),
+                         thumbnails=snapshot_thumbnails(snapshot))
 
 
 def save_quote(catalog: Catalog, order: dict) -> int:
