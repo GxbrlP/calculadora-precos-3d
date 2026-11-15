@@ -31,13 +31,22 @@ Fedora 36+, Mint 21+).
 
 ## Arquivo de entrada
 
-O app espera o `.gcode.3mf` exportado do Bambu Studio com **Ctrl+G** (Exportar
-G-code fatiado). Cada arquivo é um produto; para um produto de várias placas,
-exporte no Bambu Studio um único `.gcode.3mf` com todas as placas fatiadas.
+O app espera um `.gcode.3mf` fatiado no Bambu Studio. Cada arquivo é um produto.
+
+Para ler peso e tempo de **todas as placas**, fatie tudo e use **Arquivo →
+Exportar → Exportar todo o arquivo fatiado em placas**: sai um único
+`.gcode.3mf` com todas elas.
+
+**Ctrl+G** exporta só a placa selecionada; use apenas quando quiser precificar
+aquela placa. As outras aparecem como "não fatiada" e não entram na soma.
 
 Um projeto salvo com **Ctrl+S** não serve para ler peso e tempo: o Bambu Studio
 descarta o fatiamento ao salvar. Nesse caso o app avisa e pede o peso e o tempo
 de impressão manualmente.
+
+Quando o arquivo traz a imagem de cada placa (projetos salvos ou fatiados pelo
+Bambu Studio), o app mostra a miniatura de todas elas no produto e as guarda no
+orçamento salvo. Um `.3mf` exportado só com o modelo fica sem imagem.
 
 ## Instalação
 
