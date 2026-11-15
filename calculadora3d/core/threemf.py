@@ -1,11 +1,12 @@
 import json
+import re
 import zipfile
 import zlib
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from xml.etree import ElementTree
 
-from calculadora3d.core.models import FilamentUsage, Plate, SlicedProject
+from calculadora3d.core.models import FilamentUsage, Plate, PlateThumbnail, SlicedProject
 
 MODEL = "3D/3dmodel.model"
 PROJECT_SETTINGS = "Metadata/project_settings.config"
@@ -13,6 +14,10 @@ SLICE_INFO = "Metadata/slice_info.config"
 MODEL_SETTINGS = "Metadata/model_settings.config"
 
 DIVERGENCE_LIMIT = Decimal("0.02")
+
+THUMBNAIL = re.compile(r"Metadata/plate_(\d+)\.png")
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+MAX_THUMBNAIL_BYTES = 1_048_576
 
 
 class ThreeMFError(Exception):
@@ -199,6 +204,23 @@ def _unsliced_plates(model_settings: ElementTree.Element | None,
     return unsliced
 
 
+def _thumbnails(zf: zipfile.ZipFile, unsliced: set[int]) -> tuple[PlateThumbnail, ...]:
+    """Imagens das placas; qualquer imagem ilegível ou suspeita é ignorada."""
+    found: list[PlateThumbnail] = []
+    for info in zf.infolist():
+        match = THUMBNAIL.fullmatch(info.filename)
+        if match is None or info.file_size > MAX_THUMBNAIL_BYTES:
+            continue
+        try:
+            png = zf.read(info)
+        except Exception:  # imagem é só conveniência: nunca impede abrir o arquivo
+            continue
+        if png.startswith(PNG_SIGNATURE):
+            plate = int(match.group(1))
+            found.append(PlateThumbnail(plate, png, plate in unsliced))
+    return tuple(sorted(found, key=lambda t: t.plate))
+
+
 def read_project(path: Path) -> SlicedProject:
     path = Path(path)
     try:
@@ -210,25 +232,27 @@ def read_project(path: Path) -> SlicedProject:
         settings = _parse_json(zf, PROJECT_SETTINGS)
         slice_info = _parse_xml(zf, SLICE_INFO)
         model_settings = _parse_xml(zf, MODEL_SETTINGS)
+        plates: list[Plate] = []
+        warnings: list[str] = []
+        usage: list[FilamentUsage] = []
+        if slice_info is not None:
+            plates, usage, warnings = _plates_from_slice_info(slice_info)
+        unsliced = (_unsliced_plates(model_settings, {p.index for p in plates})
+                    if plates else [])
+        thumbnails = _thumbnails(zf, set(unsliced))
 
     printer = settings.get("printer_model")
     printer_model = str(printer) if printer else None
     name = _project_name(model_settings, path)
 
-    plates: list[Plate] = []
-    warnings: list[str] = []
-    usage: list[FilamentUsage] = []
-    if slice_info is not None:
-        plates, usage, warnings = _plates_from_slice_info(slice_info)
-
     if plates:
         usage = [_enrich(u, settings) for u in usage]
-        unsliced = _unsliced_plates(model_settings, {p.index for p in plates})
         warnings += [_unsliced_warning(i) for i in unsliced]
         return SlicedProject(
             name=name, source_path=path, printer_model=printer_model,
             plates=tuple(plates), usage=tuple(usage), is_sliced=True,
             warnings=tuple(warnings), sources=(path,), unsliced_plates=tuple(unsliced),
+            thumbnails=thumbnails,
         )
 
     slots = _extruders(model_settings) or [1]
@@ -241,4 +265,5 @@ def read_project(path: Path) -> SlicedProject:
         name=name, source_path=path, printer_model=printer_model,
         plates=(), usage=tuple(usage), is_sliced=False,
         warnings=tuple(warnings), sources=(path,), model_instances=instances,
+        thumbnails=thumbnails,
     )

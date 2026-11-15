@@ -26,6 +26,14 @@ class Plate:
 
 
 @dataclass(frozen=True)
+class PlateThumbnail:
+    """Imagem PNG de uma placa; unsliced marca placa não fatiada de projeto fatiado."""
+    plate: int
+    png: bytes
+    unsliced: bool = False
+
+
+@dataclass(frozen=True)
 class SlicedProject:
     name: str
     source_path: Path
@@ -37,6 +45,7 @@ class SlicedProject:
     sources: tuple[Path, ...] = ()
     model_instances: int = 0
     unsliced_plates: tuple[int, ...] = ()
+    thumbnails: tuple[PlateThumbnail, ...] = ()
 
     @property
     def total_seconds(self) -> int:

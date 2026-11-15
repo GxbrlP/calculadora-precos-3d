@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from calculadora3d.core.threemf import ThreeMFError, read_project
+from calculadora3d.core.threemf import (MAX_THUMBNAIL_BYTES, PNG_SIGNATURE,
+                                        ThreeMFError, read_project)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 MODEL_XML = '<?xml version="1.0"?><model unit="millimeter"/>'
+PNG = PNG_SIGNATURE + b"resto"
 
 
 def _novo_caminho(nome: str) -> Path:
@@ -19,7 +21,7 @@ def _novo_caminho(nome: str) -> Path:
 
 def _fixture_sintetica(*, weight="10", used_g=("10",), prediction="3600",
                        printer="Bambu Lab A1", objects=1, model_settings=None,
-                       plate_index=1) -> Path:
+                       plate_index=1, extra_entries=None) -> Path:
     itens = used_g.items() if isinstance(used_g, dict) else enumerate(used_g, start=1)
     filaments = "".join(
         f'<filament id="{i}" type="PLA" color="#161616" used_m="1.0" used_g="{g}"/>'
@@ -42,6 +44,8 @@ def _fixture_sintetica(*, weight="10", used_g=("10",), prediction="3600",
         z.writestr("Metadata/project_settings.config", json.dumps({"printer_model": printer}))
         if model_settings is not None:
             z.writestr("Metadata/model_settings.config", model_settings)
+        for nome, dados in (extra_entries or {}).items():
+            z.writestr(nome, dados)
     return caminho
 
 
@@ -254,3 +258,31 @@ def test_placa_fatiada_completa_nao_gera_aviso_de_dado_ausente():
 def test_placa_nao_fatiada_de_um_arquivo_so_continua_avisando():
     p = read_project(_placa_exportada(1))
     assert any("placa 2 não foi fatiada" in w for w in p.warnings)
+
+
+def test_miniaturas_de_todas_as_placas_com_a_nao_fatiada_marcada():
+    p = read_project(FIXTURES / "sliced_mono_1plate.3mf")
+    assert [(t.plate, t.unsliced) for t in p.thumbnails] == [(1, False), (2, True)]
+    assert all(t.png.startswith(PNG_SIGNATURE) for t in p.thumbnails)
+
+
+def test_projeto_salvo_sem_fatiar_traz_a_miniatura():
+    p = read_project(FIXTURES / "saved_project_3colors.3mf")
+    assert [(t.plate, t.unsliced) for t in p.thumbnails] == [(1, False)]
+
+
+def test_arquivo_so_com_modelo_fica_sem_miniatura():
+    assert read_project(FIXTURES / "model_only_3colors.3mf").thumbnails == ()
+
+
+def test_miniaturas_ignoram_variantes_lixo_e_gigantes_e_ordenam_por_numero():
+    p = read_project(_fixture_sintetica(extra_entries={
+        "Metadata/plate_10.png": PNG,
+        "Metadata/plate_2.png": PNG,
+        "Metadata/plate_1_small.png": PNG,
+        "Metadata/plate_no_light_1.png": PNG,
+        "Metadata/top_1.png": PNG,
+        "Metadata/plate_3.png": b"nao e png",
+        "Metadata/plate_4.png": PNG_SIGNATURE + b"x" * MAX_THUMBNAIL_BYTES,
+    }))
+    assert [t.plate for t in p.thumbnails] == [2, 10]
