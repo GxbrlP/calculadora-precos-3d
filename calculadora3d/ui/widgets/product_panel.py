@@ -21,6 +21,7 @@ from calculadora3d.core.pricing import (
 )
 from calculadora3d.core.quotes import build_product, snapshot_project
 from calculadora3d.ui.formatting import brl, duration, grams
+from calculadora3d.ui.widgets.plate_thumbnails import PlateThumbnails
 from calculadora3d.ui.widgets.slot_table import SlotTable, filament_label
 from calculadora3d.ui.widgets.task_list import TaskList
 
@@ -160,6 +161,8 @@ class ProductPanel(QWidget):
         inner = QVBoxLayout(self.box)
         inner.addLayout(header)
         inner.addLayout(form)
+        self.thumbnails = PlateThumbnails(project.thumbnails)
+        inner.addWidget(self.thumbnails)
         if not sliced:
             unsliced = QLabel(UNSLICED_TEXT)
             unsliced.setStyleSheet("font-weight: bold;")
@@ -371,4 +374,4 @@ class ProductPanel(QWidget):
         return build_product(
             project.name, source, rows, inputs.tasks, breakdown, tiers,
             inputs.copies, seconds, printer_id=printer.id,
-            extra_materials=inputs.extra_materials)
+            extra_materials=inputs.extra_materials, thumbnails=project.thumbnails)

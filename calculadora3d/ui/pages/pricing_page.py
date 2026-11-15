@@ -12,12 +12,14 @@ from PySide6.QtWidgets import (
 from calculadora3d.core.catalog import Catalog
 from calculadora3d.core.quotes import (
     build_order, normalize_order, save_quote, snapshot_project, snapshot_result,
+    snapshot_thumbnails,
 )
 from calculadora3d.core.threemf import ThreeMFError, read_project
 from calculadora3d.ui.formatting import brl, date_time, duration, grams
 from calculadora3d.ui.pdf_export import export_quotes_pdf
 from calculadora3d.ui.widgets.drop_area import DropArea
 from calculadora3d.ui.widgets.order_result import OrderResult, ResultRow
+from calculadora3d.ui.widgets.plate_thumbnails import PlateThumbnails
 from calculadora3d.ui.widgets.product_panel import (
     Blocked, CatalogView, ProductPanel, cost_line,
 )
@@ -82,8 +84,8 @@ class PricingPage(QWidget):
         self.saved_banner = QLabel()
         self.saved_banner.setWordWrap(True)
         self.saved_banner.setStyleSheet(SAVED_STYLE)
-        self.saved_details = QLabel()
-        self.saved_details.setWordWrap(True)
+        self._saved_products_layout = QVBoxLayout()
+        self._saved_products_layout.setContentsMargins(0, 0, 0, 0)
         self.new_calc_button = QPushButton("Novo cálculo")
         self.new_calc_button.clicked.connect(self.clear)
         self.saved_export_button = QPushButton(EXPORT_TEXT)
@@ -94,7 +96,7 @@ class PricingPage(QWidget):
         saved_buttons.addStretch(1)
         saved_layout = QVBoxLayout(self.saved_box)
         saved_layout.addWidget(self.saved_banner)
-        saved_layout.addWidget(self.saved_details)
+        saved_layout.addLayout(self._saved_products_layout)
         saved_layout.addLayout(saved_buttons)
         self.saved_box.hide()
 
@@ -251,12 +253,17 @@ class PricingPage(QWidget):
             return
         created = datetime.fromisoformat(order["created_at"])
         rows = [ResultRow(str(p["project_name"]), int(p["copies"]), p) for p in products]
-        details = "\n\n".join(_saved_details(p) for p in products)
+        details = [_saved_details(p) for p in products]
         self.clear()
         self._saved_order = order
         self.saved_banner.setText(
             f"Orçamento salvo em {date_time(created)} — valores do momento em que foi salvo")
-        self.saved_details.setText(details)
+        for product, text in zip(products, details):
+            label = QLabel(text)
+            label.setWordWrap(True)
+            self._saved_products_layout.addWidget(label)
+            self._saved_products_layout.addWidget(
+                PlateThumbnails(snapshot_thumbnails(product)))
         self.saved_box.show()
         self.summary_box.hide()
         self.save_row.hide()
@@ -278,6 +285,10 @@ class PricingPage(QWidget):
 
     def _leave_snapshot(self) -> None:
         self._saved_order = None
+        while self._saved_products_layout.count():
+            widget = self._saved_products_layout.takeAt(0).widget()
+            widget.setParent(None)
+            widget.deleteLater()
         self.saved_box.hide()
         self.based_on_label.hide()
 
